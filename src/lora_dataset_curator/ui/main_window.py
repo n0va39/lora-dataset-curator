@@ -662,12 +662,15 @@ class MainWindow(QMainWindow):
         self.analyze_button.clicked.connect(self.analyze_duplicate_groups)
         self.prepare_cache_button = QPushButton("캐시 준비")
         self.prepare_cache_button.clicked.connect(self.prepare_duplicate_cache)
+        self.apply_recommendations_button = QPushButton("추천/비중복 이동 등록")
+        self.apply_recommendations_button.clicked.connect(self.apply_recommended_decisions)
 
         controls_widget = QWidget()
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.addWidget(self.analyze_button)
         controls.addWidget(self.prepare_cache_button)
+        controls.addWidget(self.apply_recommendations_button)
         controls.addWidget(self.use_perceptual_checkbox)
         controls.addWidget(QLabel("pHash 기준"))
         controls.addWidget(self.phash_threshold)
@@ -938,6 +941,48 @@ class MainWindow(QMainWindow):
         row = selected[0].row()
         if 0 <= row < len(self.duplicate_result.groups):
             self.populate_group_members(self.duplicate_result.groups[row])
+
+    def apply_recommended_decisions(self) -> None:
+        if self.duplicate_result is None:
+            QMessageBox.information(
+                self,
+                "추천 결정 등록",
+                "먼저 중복 그룹 분석을 실행하세요.",
+            )
+            return
+
+        grouped_paths: set[Path] = set()
+        recommended_paths: set[Path] = set()
+        for group in self.duplicate_result.groups:
+            grouped_paths.update(record.image_path for record in group.images)
+            if group.recommended_keep is not None:
+                recommended_paths.add(group.recommended_keep.image_path)
+
+        move_count = 0
+        skip_count = 0
+        for record in self.records:
+            action = (
+                "move"
+                if record.image_path in recommended_paths or record.image_path not in grouped_paths
+                else "skip"
+            )
+            self.review_decisions[str(record.image_path)] = action
+            record.review_status = action
+            if action == "move":
+                move_count += 1
+            else:
+                skip_count += 1
+
+        save_decisions(self.output_root(), self.review_decisions)
+        self.populate_table()
+        if self.current_record is not None:
+            self.select_record(self.current_record)
+        self.refresh_current_group_members()
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.show_record(self.current_record)
+        self.status_label.setText(
+            f"추천/비중복 이동 {move_count}개, 보류 {skip_count}개로 등록했습니다."
+        )
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
@@ -1319,6 +1364,7 @@ class MainWindow(QMainWindow):
         self.scan_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy)
         self.prepare_cache_button.setEnabled(not busy)
+        self.apply_recommendations_button.setEnabled(not busy)
         self.execute_button.setEnabled(not busy)
         self.status_label.setText(message)
         if busy:

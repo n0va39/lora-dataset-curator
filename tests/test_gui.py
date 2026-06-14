@@ -118,6 +118,38 @@ def test_duplicate_analysis_sorts_review_table_by_group(tmp_path):
     window.close()
 
 
+def test_apply_recommended_decisions_moves_keep_and_ungrouped_records(tmp_path):
+    Image.new("RGB", (16, 8), color="green").save(tmp_path / "a_ungrouped.png")
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "z_group_a.png")
+    Image.new("RGB", (24, 16), color="blue").save(tmp_path / "z_group_b.png")
+    (tmp_path / "z_group_a.json").write_text('{"id": 10}', encoding="utf-8")
+    (tmp_path / "z_group_b.json").write_text('{"id": 10}', encoding="utf-8")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.use_perceptual_checkbox.setChecked(False)
+    window.analyze_duplicate_groups()
+    window.set_current_decision("delete")
+
+    window.apply_recommended_decisions()
+
+    assert app is not None
+    assert window.review_decisions[str(tmp_path / "a_ungrouped.png")] == "move"
+    assert window.review_decisions[str(tmp_path / "z_group_b.png")] == "move"
+    assert window.review_decisions[str(tmp_path / "z_group_a.png")] == "skip"
+    assert "추천/비중복 이동 2개, 보류 1개" in window.status_label.text()
+
+    next_window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+
+    assert next_window.review_decisions[str(tmp_path / "a_ungrouped.png")] == "move"
+    assert next_window.review_decisions[str(tmp_path / "z_group_b.png")] == "move"
+    assert next_window.review_decisions[str(tmp_path / "z_group_a.png")] == "skip"
+
+    window.close()
+    next_window.close()
+
+
 def test_review_decisions_are_saved_and_loaded(tmp_path):
     Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
 
