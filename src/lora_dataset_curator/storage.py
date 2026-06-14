@@ -133,7 +133,16 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def load_settings() -> dict[str, Any]:
-    return load_json(ensure_app_data_dirs().settings_path)
+    return DEFAULT_SETTINGS | load_json(ensure_app_data_dirs().settings_path)
+
+
+def save_settings(settings: dict[str, Any]) -> None:
+    paths = ensure_app_data_dirs()
+    merged = DEFAULT_SETTINGS | load_json(paths.settings_path) | settings
+    paths.settings_path.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def load_default_profile() -> dict[str, Any]:

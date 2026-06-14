@@ -7,6 +7,8 @@ from lora_dataset_curator.storage import (
     duplicate_groups_file_path,
     ensure_app_data_dirs,
     load_default_profile,
+    load_settings,
+    save_settings,
     stable_path_key,
 )
 
@@ -63,3 +65,21 @@ def test_old_default_profile_enables_perceptual_by_default(tmp_path):
     profile = load_default_profile()
 
     assert profile["duplicates"]["use_perceptual"] is True
+
+
+def test_settings_are_saved_with_defaults(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    save_settings(
+        {
+            "last_input_dir": str(input_dir),
+            "last_output_dir": str(output_dir),
+        }
+    )
+
+    settings = load_settings()
+
+    assert settings["active_profile"] == "default"
+    assert settings["last_input_dir"] == str(input_dir)
+    assert settings["last_output_dir"] == str(output_dir)

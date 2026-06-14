@@ -13,7 +13,11 @@ QtGui = pytest.importorskip("PySide6.QtGui")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
-from lora_dataset_curator.storage import ensure_app_data_dirs  # noqa: E402
+from lora_dataset_curator.storage import (  # noqa: E402
+    ensure_app_data_dirs,
+    load_settings,
+    save_settings,
+)
 from lora_dataset_curator.ui import main_window as main_window_module  # noqa: E402
 from lora_dataset_curator.ui.main_window import MainWindow  # noqa: E402
 
@@ -38,6 +42,38 @@ def test_main_window_scans_initial_dataset(tmp_path):
     assert window.use_perceptual_checkbox.isChecked()
 
     window.close()
+
+
+def test_main_window_restores_and_saves_last_paths(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    next_input_dir = tmp_path / "next_input"
+    next_output_dir = tmp_path / "next_output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    save_settings(
+        {
+            "last_input_dir": str(input_dir),
+            "last_output_dir": str(output_dir),
+        }
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(background_tasks=False)
+
+    assert app is not None
+    assert window.input_path.text() == str(input_dir)
+    assert window.output_path.text() == str(output_dir)
+
+    window.input_path.setText(str(next_input_dir))
+    window.output_path.setText(str(next_output_dir))
+    window.close()
+
+    settings = load_settings()
+
+    assert settings["last_input_dir"] == str(next_input_dir)
+    assert settings["last_output_dir"] == str(next_output_dir)
 
 
 def test_main_window_populates_duplicate_group_tab(tmp_path):

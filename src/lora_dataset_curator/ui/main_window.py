@@ -65,7 +65,12 @@ from lora_dataset_curator.duplicate_analysis import (
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
 from lora_dataset_curator.models import DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
-from lora_dataset_curator.storage import ensure_app_data_dirs, load_default_profile
+from lora_dataset_curator.storage import (
+    ensure_app_data_dirs,
+    load_default_profile,
+    load_settings,
+    save_settings,
+)
 
 ProgressCallback = Callable[[int, int, str], None]
 DECISION_LABELS = {"move": "이동", "delete": "삭제 예정", "skip": "보류"}
@@ -436,13 +441,20 @@ class MainWindow(QMainWindow):
         self.active_worker: TaskWorker | None = None
         self.floating_preview: FloatingPreviewWindow | None = None
         self.app_paths = ensure_app_data_dirs()
+        self.settings = load_settings()
         self.profile = load_default_profile()
 
         self.setWindowTitle("LoRA Dataset Curator")
         self.resize(1280, 800)
 
-        self.input_path = QLineEdit(str(input_dir) if input_dir else "")
-        self.output_path = QLineEdit(str(output_dir) if output_dir else str(Path.cwd() / "output"))
+        initial_input_dir = input_dir or self.path_setting("last_input_dir")
+        initial_output_dir = (
+            output_dir
+            or self.path_setting("last_output_dir")
+            or Path.cwd() / "output"
+        )
+        self.input_path = QLineEdit(str(initial_input_dir) if initial_input_dir else "")
+        self.output_path = QLineEdit(str(initial_output_dir))
         self.summary_label = QLabel("아직 스캔하지 않았습니다.")
         self.status_label = QLabel("대기 중")
         self.progress_bar = QProgressBar()
@@ -518,6 +530,25 @@ class MainWindow(QMainWindow):
 
         if input_dir is not None:
             self.scan()
+
+    def path_setting(self, key: str) -> Path | None:
+        value = self.settings.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return Path(value).expanduser()
+
+    def save_current_paths(self) -> None:
+        updates: dict[str, str] = {}
+        input_text = self.input_path.text().strip()
+        output_text = self.output_path.text().strip()
+        if input_text:
+            updates["last_input_dir"] = str(Path(input_text).expanduser())
+        if output_text:
+            updates["last_output_dir"] = str(Path(output_text).expanduser())
+        if not updates:
+            return
+        save_settings(updates)
+        self.settings = load_settings()
 
     @staticmethod
     def configure_interactive_header(table: QTableWidget, widths: list[int]) -> None:
@@ -747,6 +778,7 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.input_path.setText(QDir.toNativeSeparators(path))
+            self.save_current_paths()
 
     def choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -756,6 +788,7 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.output_path.setText(QDir.toNativeSeparators(path))
+            self.save_current_paths()
 
     def scan(self) -> None:
         input_dir = Path(self.input_path.text()).expanduser()
@@ -767,6 +800,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.save_current_paths()
         if self.background_tasks:
             self.start_background_task(
                 lambda progress_callback: scan_dataset(
@@ -1327,6 +1361,10 @@ class MainWindow(QMainWindow):
 
     def output_root(self) -> Path:
         return Path(self.output_path.text()).expanduser().resolve()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.save_current_paths()
+        super().closeEvent(event)
 
     def format_caption_meta(self, record: ImageRecord) -> str:
         size = f"{record.width}x{record.height}" if record.width and record.height else "unknown"
