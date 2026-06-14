@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
@@ -44,12 +46,18 @@ ProgressCallback = Callable[[int, int, str], None]
 
 
 class ImagePreview(QWidget):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        minimum_width: int = 320,
+        minimum_height: int = 220,
+        maximum_height: int = 320,
+    ) -> None:
         super().__init__()
         self.pixmap = QPixmap()
         self.message = "선택된 이미지 없음"
-        self.setMinimumSize(320, 220)
-        self.setMaximumHeight(320)
+        self.setMinimumSize(minimum_width, minimum_height)
+        self.setMaximumHeight(maximum_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_image(self, path: Path) -> None:
@@ -91,6 +99,35 @@ class ImagePreview(QWidget):
         painter.drawPixmap(x, y, scaled)
 
 
+class GroupImageTile(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.preview = ImagePreview(
+            minimum_width=180,
+            minimum_height=150,
+            maximum_height=180,
+        )
+        self.title_label = QLabel()
+        self.title_label.setWordWrap(True)
+        self.meta_label = QLabel()
+        self.meta_label.setWordWrap(True)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.preview)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.meta_label)
+
+    def set_record(self, record: ImageRecord, *, recommended: bool) -> None:
+        self.preview.set_image(record.image_path)
+        prefix = "[keep] " if recommended else ""
+        self.title_label.setText(f"{prefix}{record.image_path.name}")
+        size = f"{record.width}x{record.height}" if record.width and record.height else "?"
+        sidecars = []
+        sidecars.append("txt" if record.caption_path else "no txt")
+        sidecars.append("json" if record.metadata_path else "no json")
+        self.meta_label.setText(f"{size} | {', '.join(sidecars)}")
+
+
 class TaskWorker(QObject):
     progress = Signal(int, int, str)
     finished = Signal(object)
@@ -118,6 +155,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.records: list[ImageRecord] = []
+        self.scan_order: dict[Path, int] = {}
+        self.record_group_ids: dict[Path, str] = {}
         self.current_record: ImageRecord | None = None
         self.duplicate_result: DuplicateAnalysisResult | None = None
         self.background_tasks = background_tasks
@@ -136,11 +175,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.preview_label = ImagePreview()
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
+            ["그룹", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
@@ -182,6 +221,11 @@ class MainWindow(QMainWindow):
         self.group_member_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.group_member_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.group_member_table.itemSelectionChanged.connect(self.on_group_member_selection_changed)
+        self.group_preview_container = QWidget()
+        self.group_preview_layout = QGridLayout(self.group_preview_container)
+        self.group_preview_area = QScrollArea()
+        self.group_preview_area.setWidgetResizable(True)
+        self.group_preview_area.setWidget(self.group_preview_container)
 
         self.setCentralWidget(self.build_layout())
         self.create_menu()
@@ -278,8 +322,14 @@ class MainWindow(QMainWindow):
 
         self.duplicate_splitter = QSplitter()
         self.duplicate_splitter.setChildrenCollapsible(False)
+        member_panel = QWidget()
+        member_layout = QVBoxLayout(member_panel)
+        member_layout.addWidget(self.group_member_table)
+        member_layout.addWidget(QLabel("그룹 이미지 미리보기"))
+        member_layout.addWidget(self.group_preview_area)
+
         self.duplicate_splitter.addWidget(self.group_table)
-        self.duplicate_splitter.addWidget(self.group_member_table)
+        self.duplicate_splitter.addWidget(member_panel)
         self.duplicate_splitter.setStretchFactor(0, 2)
         self.duplicate_splitter.setStretchFactor(1, 3)
         self.duplicate_splitter.setSizes([520, 760])
@@ -365,6 +415,8 @@ class MainWindow(QMainWindow):
 
     def finish_scan(self, records: list[ImageRecord]) -> None:
         self.records = records
+        self.scan_order = {record.image_path: index for index, record in enumerate(records)}
+        self.record_group_ids = {}
 
         self.populate_table()
         self.clear_duplicate_groups()
@@ -378,6 +430,7 @@ class MainWindow(QMainWindow):
         for row, record in enumerate(self.records):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
             values = [
+                self.record_group_ids.get(record.image_path, ""),
                 record.image_path.name,
                 size,
                 "yes" if record.caption_path else "no",
@@ -499,13 +552,39 @@ class MainWindow(QMainWindow):
 
     def finish_duplicate_analysis(self, result: DuplicateAnalysisResult) -> None:
         self.duplicate_result = result
+        self.sort_records_by_duplicate_groups()
+        self.populate_table()
         self.populate_group_table()
 
     def clear_duplicate_groups(self) -> None:
         self.duplicate_result = None
+        self.record_group_ids = {}
         self.group_table.setRowCount(0)
         self.group_member_table.setRowCount(0)
+        self.clear_group_previews()
         self.duplicate_summary_label.setText("아직 중복 분석을 실행하지 않았습니다.")
+
+    def sort_records_by_duplicate_groups(self) -> None:
+        if self.duplicate_result is None:
+            return
+
+        self.record_group_ids = {}
+        group_rank: dict[str, int] = {}
+        member_rank: dict[Path, int] = {}
+        for group_index, group in enumerate(self.duplicate_result.groups):
+            group_rank[group.group_id] = group_index
+            for member_index, record in enumerate(self.sorted_group_records(group)):
+                self.record_group_ids[record.image_path] = group.group_id
+                member_rank[record.image_path] = member_index
+
+        self.records.sort(
+            key=lambda record: (
+                0 if record.image_path in self.record_group_ids else 1,
+                group_rank.get(self.record_group_ids.get(record.image_path, ""), 0),
+                member_rank.get(record.image_path, self.scan_order.get(record.image_path, 0)),
+                self.scan_order.get(record.image_path, 0),
+            )
+        )
 
     def populate_group_table(self) -> None:
         if self.duplicate_result is None:
@@ -541,15 +620,7 @@ class MainWindow(QMainWindow):
         self.populate_group_members(self.duplicate_result.groups[row])
 
     def populate_group_members(self, group: DuplicateGroup) -> None:
-        records = sorted(
-            group.images,
-            key=lambda record: (
-                record != group.recommended_keep,
-                -record.resolution_pixels,
-                -(record.file_size or 0),
-                record.image_path.name,
-            ),
-        )
+        records = self.sorted_group_records(group)
         self.group_member_table.setRowCount(len(records))
         for row, record in enumerate(records):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
@@ -567,6 +638,37 @@ class MainWindow(QMainWindow):
                 self.group_member_table.setItem(row, column, item)
         if records:
             self.group_member_table.selectRow(0)
+        self.populate_group_previews(group, records)
+
+    @staticmethod
+    def sorted_group_records(group: DuplicateGroup) -> list[ImageRecord]:
+        return sorted(
+            group.images,
+            key=lambda record: (
+                record != group.recommended_keep,
+                -record.resolution_pixels,
+                -(record.file_size or 0),
+                record.image_path.name,
+            ),
+        )
+
+    def populate_group_previews(
+        self,
+        group: DuplicateGroup,
+        records: list[ImageRecord],
+    ) -> None:
+        self.clear_group_previews()
+        for index, record in enumerate(records):
+            tile = GroupImageTile()
+            tile.set_record(record, recommended=record == group.recommended_keep)
+            self.group_preview_layout.addWidget(tile, index // 3, index % 3)
+
+    def clear_group_previews(self) -> None:
+        while self.group_preview_layout.count():
+            item = self.group_preview_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
     def on_group_member_selection_changed(self) -> None:
         selected = self.group_member_table.selectionModel().selectedRows()

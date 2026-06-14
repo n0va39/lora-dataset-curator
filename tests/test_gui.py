@@ -45,7 +45,28 @@ def test_main_window_populates_duplicate_group_tab(tmp_path):
     assert app is not None
     assert window.group_table.rowCount() == 1
     assert window.group_member_table.rowCount() == 2
+    assert window.group_preview_layout.count() == 2
     assert "그룹: 1" in window.duplicate_summary_label.text()
+
+    window.close()
+
+
+def test_duplicate_analysis_sorts_review_table_by_group(tmp_path):
+    Image.new("RGB", (16, 8), color="green").save(tmp_path / "a_ungrouped.png")
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "z_group_a.png")
+    Image.new("RGB", (16, 8), color="blue").save(tmp_path / "z_group_b.png")
+    (tmp_path / "z_group_a.json").write_text('{"id": 10}', encoding="utf-8")
+    (tmp_path / "z_group_b.json").write_text('{"id": 10}', encoding="utf-8")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.analyze_duplicate_groups()
+
+    assert app is not None
+    assert window.table.item(0, 0).text() == "G0001"
+    assert window.table.item(1, 0).text() == "G0001"
+    assert window.table.item(2, 0).text() == ""
+    assert window.table.item(2, 1).text() == "a_ungrouped.png"
 
     window.close()
 
