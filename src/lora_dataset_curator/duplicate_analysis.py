@@ -12,6 +12,7 @@ from .models import DuplicateGroup, ImageRecord, SimilarityPair
 from .similarity import build_hash_pair, pair_key
 
 ProgressCallback = Callable[[int, int, str], None]
+DEFAULT_MAX_PERCEPTUAL_PAIRS = 500_000
 
 
 @dataclass(slots=True)
@@ -30,19 +31,18 @@ def analyze_duplicates(
     use_perceptual: bool = False,
     phash_threshold: int = 6,
     dhash_threshold: int = 6,
+    max_perceptual_pairs: int = DEFAULT_MAX_PERCEPTUAL_PAIRS,
     progress_callback: ProgressCallback | None = None,
 ) -> DuplicateAnalysisResult:
     pair_map: dict[tuple[str, str], SimilarityPair] = {}
+    if use_perceptual:
+        validate_perceptual_pair_limit(records, max_perceptual_pairs)
+
     progress = AnalysisProgress(records, use_sha256=use_sha256, use_perceptual=use_perceptual)
     progress.emit(progress_callback, "중복 분석을 시작했습니다.")
 
     if use_sha256:
-        attach_sha256(records, progress=progress, progress_callback=progress_callback)
-        add_bucket_pairs(
-            pair_map,
-            bucket_records(records, lambda record: record.sha256),
-            sha256_match=True,
-        )
+        add_sha256_pairs(pair_map, records, progress=progress, progress_callback=progress_callback)
 
     if use_metadata:
         progress.emit(progress_callback, "metadata 기준 후보를 묶는 중입니다.")
@@ -99,7 +99,7 @@ class AnalysisProgress:
     def total(self) -> int:
         total = 2
         if self.use_sha256:
-            total += len(self.records)
+            total += sha256_candidate_count(self.records)
         if self.use_perceptual:
             total += len(self.records) + pair_count(len(self.records))
         return max(total, 1)
@@ -115,6 +115,48 @@ class AnalysisProgress:
 
 def pair_count(count: int) -> int:
     return count * (count - 1) // 2
+
+
+def validate_perceptual_pair_limit(
+    records: list[ImageRecord],
+    max_perceptual_pairs: int,
+) -> None:
+    total_pairs = pair_count(len(records))
+    if total_pairs > max_perceptual_pairs:
+        raise ValueError(
+            "pHash/dHash comparison would require "
+            f"{total_pairs:,} image pairs. "
+            "Use a smaller dataset, disable pHash/dHash, or raise "
+            f"the pair limit above {max_perceptual_pairs:,}."
+        )
+
+
+def sha256_candidate_count(records: Iterable[ImageRecord]) -> int:
+    return sum(len(bucket) for bucket in file_size_buckets(records).values())
+
+
+def file_size_buckets(records: Iterable[ImageRecord]) -> dict[str, list[ImageRecord]]:
+    return bucket_records(records, lambda record: record.file_size)
+
+
+def add_sha256_pairs(
+    pair_map: dict[tuple[str, str], SimilarityPair],
+    records: Iterable[ImageRecord],
+    *,
+    progress: AnalysisProgress | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
+    candidates = [
+        record
+        for bucket in file_size_buckets(records).values()
+        for record in bucket
+    ]
+    attach_sha256(candidates, progress=progress, progress_callback=progress_callback)
+    add_bucket_pairs(
+        pair_map,
+        bucket_records(candidates, lambda record: record.sha256),
+        sha256_match=True,
+    )
 
 
 def attach_sha256(
@@ -182,34 +224,41 @@ def add_perceptual_pairs(
                     f"pHash/dHash 계산 중: {record.image_path.name}",
                 )
 
-    for record_a, record_b in combinations(records, 2):
+    total_pairs = pair_count(len(records))
+    last_progress_index = 0
+    for index, (record_a, record_b) in enumerate(combinations(records, 2), start=1):
         hashes_a = hashes.get(record_a.image_path)
         hashes_b = hashes.get(record_b.image_path)
-        if hashes_a is None or hashes_b is None:
-            continue
-        pair = build_hash_pair(
-            record_a,
-            record_b,
-            phash_a=hashes_a.get("phash"),
-            phash_b=hashes_b.get("phash"),
-            dhash_a=hashes_a.get("dhash"),
-            dhash_b=hashes_b.get("dhash"),
-        )
-        if (
-            pair.phash_distance is not None
-            and pair.phash_distance <= phash_threshold
-            or pair.dhash_distance is not None
-            and pair.dhash_distance <= dhash_threshold
-        ):
-            existing = get_or_create_pair(pair_map, record_a, record_b)
-            existing.phash_distance = pair.phash_distance
-            existing.dhash_distance = pair.dhash_distance
-            existing.tag_similarity = pair.tag_similarity
-        if progress is not None:
-            progress.advance(
+        if hashes_a is not None and hashes_b is not None:
+            pair = build_hash_pair(
+                record_a,
+                record_b,
+                phash_a=hashes_a.get("phash"),
+                phash_b=hashes_b.get("phash"),
+                dhash_a=hashes_a.get("dhash"),
+                dhash_b=hashes_b.get("dhash"),
+            )
+            if (
+                pair.phash_distance is not None
+                and pair.phash_distance <= phash_threshold
+                or pair.dhash_distance is not None
+                and pair.dhash_distance <= dhash_threshold
+            ):
+                existing = get_or_create_pair(pair_map, record_a, record_b)
+                existing.phash_distance = pair.phash_distance
+                existing.dhash_distance = pair.dhash_distance
+                existing.tag_similarity = pair.tag_similarity
+        if progress is not None and should_emit_pair_progress(index, total_pairs):
+            progress.current += index - last_progress_index
+            last_progress_index = index
+            progress.emit(
                 progress_callback,
                 f"pHash/dHash 후보 비교 중: {record_a.image_path.name}",
             )
+
+
+def should_emit_pair_progress(index: int, total: int) -> bool:
+    return index == 1 or index == total or index % 1000 == 0
 
 
 def get_or_create_pair(

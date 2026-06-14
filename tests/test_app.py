@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from lora_dataset_curator import app as cli_app
@@ -74,6 +75,22 @@ def test_duplicates_cli_prints_groups(tmp_path, capsys):
     assert exit_code == 0
     assert "Duplicate groups: 1" in output
     assert "post-id" in output
+
+
+def test_duplicates_cli_reports_perceptual_pair_limit(tmp_path):
+    for name in ("a.png", "b.png", "c.png"):
+        Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
+
+    with pytest.raises(SystemExit, match="pHash/dHash comparison"):
+        cli_app.main(
+            [
+                "duplicates",
+                str(tmp_path),
+                "--perceptual",
+                "--max-perceptual-pairs",
+                "1",
+            ]
+        )
 
 
 def test_gitignore_excludes_local_sample_folder():

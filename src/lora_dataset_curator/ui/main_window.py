@@ -33,8 +33,10 @@ from PySide6.QtWidgets import (
 
 from lora_dataset_curator.actions import build_action_plan
 from lora_dataset_curator.duplicate_analysis import (
+    DEFAULT_MAX_PERCEPTUAL_PAIRS,
     DuplicateAnalysisResult,
     analyze_duplicates,
+    pair_count,
 )
 from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
@@ -429,8 +431,20 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "중복 분석", "먼저 데이터셋을 스캔하세요.")
             return
 
+        use_perceptual = self.use_perceptual_checkbox.isChecked()
+        total_pairs = pair_count(len(self.records))
+        if use_perceptual and total_pairs > DEFAULT_MAX_PERCEPTUAL_PAIRS:
+            QMessageBox.warning(
+                self,
+                "pHash/dHash 분석 제한",
+                "pHash/dHash는 모든 이미지 쌍을 비교합니다.\n"
+                f"현재 데이터셋은 {total_pairs:,}개 쌍이 필요해서 "
+                f"기본 제한 {DEFAULT_MAX_PERCEPTUAL_PAIRS:,}개를 초과합니다.\n"
+                "우선 pHash/dHash를 끄고 metadata/SHA256 기준으로 분석하세요.",
+            )
+            return
+
         if self.background_tasks:
-            use_perceptual = self.use_perceptual_checkbox.isChecked()
             phash_threshold = self.phash_threshold.value()
             dhash_threshold = self.dhash_threshold.value()
             self.start_background_task(
@@ -439,6 +453,7 @@ class MainWindow(QMainWindow):
                     use_perceptual=use_perceptual,
                     phash_threshold=phash_threshold,
                     dhash_threshold=dhash_threshold,
+                    max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
                     progress_callback=progress_callback,
                 ),
                 self.finish_duplicate_analysis,
@@ -452,6 +467,7 @@ class MainWindow(QMainWindow):
                 use_perceptual=self.use_perceptual_checkbox.isChecked(),
                 phash_threshold=self.phash_threshold.value(),
                 dhash_threshold=self.dhash_threshold.value(),
+                max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
             )
         )
 

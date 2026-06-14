@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .actions import build_action_plan
-from .duplicate_analysis import analyze_duplicates
+from .duplicate_analysis import DEFAULT_MAX_PERCEPTUAL_PAIRS, analyze_duplicates
 from .models import DuplicateGroup
 from .scanner import scan_dataset
 
@@ -42,6 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
     duplicates_parser.add_argument("--perceptual", action="store_true")
     duplicates_parser.add_argument("--phash-threshold", type=int, default=6)
     duplicates_parser.add_argument("--dhash-threshold", type=int, default=6)
+    duplicates_parser.add_argument(
+        "--max-perceptual-pairs",
+        type=int,
+        default=DEFAULT_MAX_PERCEPTUAL_PAIRS,
+        help=(
+            "Maximum pair comparisons allowed when --perceptual is enabled "
+            f"(default: {DEFAULT_MAX_PERCEPTUAL_PAIRS})"
+        ),
+    )
     duplicates_parser.add_argument("--json", action="store_true", help="Print groups as JSON")
 
     return parser
@@ -122,12 +131,16 @@ def handle_gui(args: argparse.Namespace) -> int:
 
 def handle_duplicates(args: argparse.Namespace) -> int:
     records = scan_dataset(args.input_dir)
-    result = analyze_duplicates(
-        records,
-        use_perceptual=args.perceptual,
-        phash_threshold=args.phash_threshold,
-        dhash_threshold=args.dhash_threshold,
-    )
+    try:
+        result = analyze_duplicates(
+            records,
+            use_perceptual=args.perceptual,
+            phash_threshold=args.phash_threshold,
+            dhash_threshold=args.dhash_threshold,
+            max_perceptual_pairs=args.max_perceptual_pairs,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     if args.json:
         print(
             json.dumps(
