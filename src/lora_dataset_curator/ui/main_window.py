@@ -80,7 +80,8 @@ class ImagePreview(QWidget):
         self.pixmap = QPixmap()
         self.message = "선택된 이미지 없음"
         self.setMinimumSize(minimum_width, minimum_height)
-        self.setMaximumHeight(maximum_height)
+        if maximum_height > 0:
+            self.setMaximumHeight(maximum_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_image(self, path: Path) -> None:
@@ -126,10 +127,11 @@ class GroupImageTile(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.preview = ImagePreview(
-            minimum_width=180,
-            minimum_height=150,
-            maximum_height=180,
+            minimum_width=220,
+            minimum_height=180,
+            maximum_height=0,
         )
+        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.title_label = QLabel()
         self.title_label.setWordWrap(True)
         self.meta_label = QLabel()
@@ -357,24 +359,41 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.summary_label)
         left_layout.addWidget(self.table)
 
-        details = QWidget()
-        details.setMinimumWidth(420)
-        details_layout = QVBoxLayout(details)
-        details_layout.addWidget(self.preview_label)
-        details_layout.addLayout(self.build_action_buttons())
-        details_layout.addWidget(QLabel("파일 정보"))
-        details_layout.addWidget(self.info_text)
-        details_layout.addWidget(QLabel("캡션"))
-        details_layout.addWidget(self.caption_text)
-        details_layout.addWidget(QLabel("메타데이터"))
-        details_layout.addWidget(self.metadata_text)
-        details_layout.addWidget(QLabel("Dry-run 이동 계획"))
-        details_layout.addWidget(self.plan_text)
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.addWidget(self.preview_label, stretch=1)
+        preview_layout.addLayout(self.build_action_buttons())
+
+        info_panel = QWidget()
+        info_layout = QVBoxLayout(info_panel)
+        info_layout.addWidget(QLabel("파일 정보"))
+        info_layout.addWidget(self.info_text)
+
+        caption_panel = QWidget()
+        caption_layout = QVBoxLayout(caption_panel)
+        caption_layout.addWidget(QLabel("캡션"))
+        caption_layout.addWidget(self.caption_text)
+
+        metadata_panel = QWidget()
+        metadata_layout = QVBoxLayout(metadata_panel)
+        metadata_layout.addWidget(QLabel("메타데이터"))
+        metadata_layout.addWidget(self.metadata_text)
+
+        plan_panel = QWidget()
+        plan_layout = QVBoxLayout(plan_panel)
+        plan_layout.addWidget(QLabel("Dry-run 이동 계획"))
+        plan_layout.addWidget(self.plan_text)
+
+        self.review_detail_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.review_detail_splitter.setChildrenCollapsible(False)
+        for panel in (preview_panel, info_panel, caption_panel, metadata_panel, plan_panel):
+            self.review_detail_splitter.addWidget(panel)
+        self.review_detail_splitter.setSizes([300, 150, 150, 150, 120])
 
         self.review_splitter = QSplitter()
         self.review_splitter.setChildrenCollapsible(False)
         self.review_splitter.addWidget(left)
-        self.review_splitter.addWidget(details)
+        self.review_splitter.addWidget(self.review_detail_splitter)
         self.review_splitter.setStretchFactor(0, 3)
         self.review_splitter.setStretchFactor(1, 2)
         self.review_splitter.setSizes([760, 520])
@@ -390,22 +409,24 @@ class MainWindow(QMainWindow):
         self.analyze_button = QPushButton("분석")
         self.analyze_button.clicked.connect(self.analyze_duplicate_groups)
 
+        controls_widget = QWidget()
         controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.addWidget(self.analyze_button)
         controls.addWidget(self.use_perceptual_checkbox)
         controls.addWidget(QLabel("pHash 기준"))
         controls.addWidget(self.phash_threshold)
         controls.addWidget(QLabel("dHash 기준"))
         controls.addWidget(self.dhash_threshold)
+        controls.addWidget(self.duplicate_summary_label)
         controls.addStretch()
+        controls_widget.setLayout(controls)
 
         self.duplicate_splitter = QSplitter()
         self.duplicate_splitter.setChildrenCollapsible(False)
         member_panel = QWidget()
         member_layout = QVBoxLayout(member_panel)
-        member_layout.addWidget(self.group_member_table)
-        member_layout.addWidget(QLabel("그룹 이미지 미리보기"))
-        member_layout.addWidget(self.group_preview_area)
+        member_layout.addWidget(self.group_member_table, stretch=1)
 
         self.duplicate_splitter.addWidget(self.group_table)
         self.duplicate_splitter.addWidget(member_panel)
@@ -413,18 +434,33 @@ class MainWindow(QMainWindow):
         self.duplicate_splitter.setStretchFactor(1, 3)
         self.duplicate_splitter.setSizes([520, 760])
 
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.addWidget(QLabel("그룹 이미지 미리보기"))
+        preview_layout.addWidget(self.group_preview_area, stretch=1)
+
+        self.duplicate_vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.duplicate_vertical_splitter.setChildrenCollapsible(False)
+        self.duplicate_vertical_splitter.addWidget(self.duplicate_splitter)
+        self.duplicate_vertical_splitter.addWidget(preview_panel)
+        self.duplicate_vertical_splitter.setStretchFactor(0, 3)
+        self.duplicate_vertical_splitter.setStretchFactor(1, 2)
+        self.duplicate_vertical_splitter.setSizes([420, 260])
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.addLayout(controls)
-        layout.addWidget(self.duplicate_summary_label)
-        layout.addWidget(self.duplicate_splitter)
+        layout.addWidget(controls_widget)
+        layout.addWidget(self.duplicate_vertical_splitter, stretch=1)
         return tab
 
-    def build_action_buttons(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def build_action_buttons(self) -> QVBoxLayout:
+        button_layout = QVBoxLayout()
+        command_row = QHBoxLayout()
+        decision_row = QHBoxLayout()
         preview_button = QPushButton("큰 미리보기")
+        preview_button.setMinimumWidth(100)
         preview_button.clicked.connect(self.show_floating_preview)
-        row.addWidget(preview_button)
+        command_row.addWidget(preview_button)
         for label, action in (
             ("보관", "keep"),
             ("이동", "move"),
@@ -432,26 +468,34 @@ class MainWindow(QMainWindow):
             ("건너뛰기", "skip"),
         ):
             button = QPushButton(label)
+            button.setMinimumWidth(72)
             button.clicked.connect(lambda _checked=False, name=action: self.show_plan(name))
-            row.addWidget(button)
+            command_row.addWidget(button)
 
         open_button = QPushButton("폴더 열기")
+        open_button.setMinimumWidth(92)
         open_button.clicked.connect(self.open_file_location)
         source_button = QPushButton("출처 열기")
+        source_button.setMinimumWidth(92)
         source_button.clicked.connect(self.open_source_url)
-        row.addWidget(open_button)
-        row.addWidget(source_button)
+        command_row.addWidget(open_button)
+        command_row.addWidget(source_button)
+        command_row.addStretch()
         for label, action in (
             ("A 이동 결정", "move"),
             ("D 삭제 예정", "delete"),
             ("S 보류", "skip"),
         ):
             button = QPushButton(label)
+            button.setMinimumWidth(104)
             button.clicked.connect(
                 lambda _checked=False, name=action: self.set_current_decision(name)
             )
-            row.addWidget(button)
-        return row
+            decision_row.addWidget(button)
+        decision_row.addStretch()
+        button_layout.addLayout(command_row)
+        button_layout.addLayout(decision_row)
+        return button_layout
 
     def create_menu(self) -> None:
         file_menu = self.menuBar().addMenu("파일")

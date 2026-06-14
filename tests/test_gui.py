@@ -158,6 +158,9 @@ def test_progress_bar_stays_visible_on_duplicate_tab(tmp_path):
     assert window.status_label.isVisible()
     assert window.review_splitter.sizes()[0] > window.review_splitter.sizes()[1]
     assert window.duplicate_splitter.sizes()[1] > window.duplicate_splitter.sizes()[0]
+    assert len([size for size in window.review_detail_splitter.sizes() if size > 0]) >= 3
+    assert window.duplicate_vertical_splitter.sizes()[0] > 0
+    assert window.duplicate_vertical_splitter.sizes()[1] > 0
 
     window.close()
 
