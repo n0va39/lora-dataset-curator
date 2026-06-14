@@ -136,6 +136,55 @@ def test_decision_shortcuts_apply_even_with_child_focus(tmp_path):
     window.close()
 
 
+def test_floating_preview_metadata_layout_is_stable(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a_long_filename_for_wrap.png")
+    Image.new("RGB", (128, 64), color="blue").save(tmp_path / "b.png")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.show()
+    window.table.selectRow(0)
+    window.show_floating_preview()
+    app.processEvents()
+
+    preview = window.floating_preview
+
+    assert app is not None
+    assert preview is not None
+    assert preview.thumbnail_list.count() == 2
+    assert preview.thumbnail_list.currentRow() == 0
+    assert preview.thumbnail_list.item(0).text() == "a_long_filename_for_wrap.png"
+    assert not preview.thumbnail_list.item(0).icon().isNull()
+    assert preview.filename_label.text() == "a_long_filename_for_wrap.png"
+    assert preview.resolution_value.text() == "16x8"
+    assert preview.file_size_value.text().endswith("B")
+    assert preview.file_type_value.text() == "PNG"
+    assert preview.decision_value.text() == "미결정"
+    assert "A 이동 결정" in preview.guide_label.text()
+
+    value_x = preview.resolution_value.mapTo(preview, QtCore.QPoint(0, 0)).x()
+    assert preview.file_size_value.mapTo(preview, QtCore.QPoint(0, 0)).x() == value_x
+    assert preview.file_type_value.mapTo(preview, QtCore.QPoint(0, 0)).x() == value_x
+    assert preview.decision_value.mapTo(preview, QtCore.QPoint(0, 0)).x() == value_x
+
+    window.select_relative_record(1)
+    app.processEvents()
+
+    assert preview.filename_label.text() == "b.png"
+    assert preview.thumbnail_list.currentRow() == 1
+    assert preview.resolution_value.text() == "128x64"
+    assert preview.resolution_value.mapTo(preview, QtCore.QPoint(0, 0)).x() == value_x
+    assert preview.file_size_value.mapTo(preview, QtCore.QPoint(0, 0)).x() == value_x
+
+    preview.thumbnail_list.setCurrentRow(0)
+    app.processEvents()
+
+    assert window.current_record is not None
+    assert window.current_record.image_path.name == "a_long_filename_for_wrap.png"
+
+    window.close()
+
+
 def test_duplicate_groups_are_loaded_from_cache(tmp_path, monkeypatch):
     Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
     Image.new("RGB", (16, 8), color="blue").save(tmp_path / "b.png")

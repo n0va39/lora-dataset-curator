@@ -6,11 +6,12 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QDir, QObject, QSize, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QAction,
     QColor,
     QDesktopServices,
+    QIcon,
     QKeySequence,
     QPainter,
     QPen,
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -182,19 +185,119 @@ class FloatingPreviewWindow(QWidget):
         )
         self.owner = owner
         self.setWindowTitle("이미지 검수")
-        self.resize(900, 900)
+        self.resize(1080, 900)
+        self.thumbnail_records: list[ImageRecord] = []
+        self.syncing_thumbnails = False
+        self.thumbnail_list = QListWidget()
+        self.thumbnail_list.setFixedWidth(190)
+        self.thumbnail_list.setIconSize(QSize(96, 96))
+        self.thumbnail_list.currentRowChanged.connect(self.on_thumbnail_row_changed)
+
         self.preview = ImagePreview(
             minimum_width=640,
             minimum_height=640,
             maximum_height=16777215,
         )
-        self.status_label = QLabel("←/→ 이동 | A 이동 | D 삭제 예정 | S 보류")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.filename_label = QLabel("선택된 이미지 없음")
+        self.filename_label.setWordWrap(True)
+        self.filename_label.setFixedHeight(48)
+        self.filename_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.preview, stretch=1)
-        layout.addWidget(self.status_label)
+        info_panel = QWidget()
+        info_layout = QGridLayout(info_panel)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setHorizontalSpacing(12)
+        info_layout.setColumnMinimumWidth(0, 72)
+        self.resolution_value = self.add_preview_info_row(info_layout, 0, "해상도", "-")
+        self.file_size_value = self.add_preview_info_row(info_layout, 1, "용량", "-")
+        self.file_type_value = self.add_preview_info_row(info_layout, 2, "형식", "-")
+        self.decision_value = self.add_preview_info_row(info_layout, 3, "현재 결정", "-")
+
+        self.guide_label = QLabel("←/→ 또는 ↑/↓ 이동 | A 이동 결정 | D 삭제 예정 | S 보류")
+        self.guide_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.guide_label.setWordWrap(True)
+
+        detail_panel = QWidget()
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(8)
+        detail_layout.addWidget(self.preview, stretch=1)
+        detail_layout.addWidget(self.filename_label)
+        detail_layout.addWidget(info_panel)
+        detail_layout.addWidget(self.guide_label)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self.thumbnail_list)
+        layout.addWidget(detail_panel, stretch=1)
         self.create_shortcuts()
+
+    @staticmethod
+    def add_preview_info_row(
+        layout: QGridLayout,
+        row: int,
+        title: str,
+        value: str,
+    ) -> QLabel:
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        value_label = QLabel(value)
+        value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        value_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(title_label, row, 0)
+        layout.addWidget(value_label, row, 1)
+        return value_label
+
+    def refresh_thumbnail_list(self) -> None:
+        records = self.owner.records
+        if [record.image_path for record in records] == [
+            record.image_path for record in self.thumbnail_records
+        ]:
+            return
+
+        self.syncing_thumbnails = True
+        self.thumbnail_list.clear()
+        self.thumbnail_records = list(records)
+        for record in self.thumbnail_records:
+            item = QListWidgetItem(
+                QIcon(self.make_thumbnail(record.image_path)),
+                record.image_path.name,
+            )
+            item.setToolTip(str(record.image_path))
+            self.thumbnail_list.addItem(item)
+        self.syncing_thumbnails = False
+
+    @staticmethod
+    def make_thumbnail(path: Path) -> QPixmap:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return QPixmap()
+        return pixmap.scaled(
+            QSize(96, 96),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def sync_thumbnail_selection(self, record: ImageRecord | None) -> None:
+        self.refresh_thumbnail_list()
+        if record is None:
+            return
+        try:
+            row = self.thumbnail_records.index(record)
+        except ValueError:
+            return
+        self.syncing_thumbnails = True
+        self.thumbnail_list.setCurrentRow(row)
+        item = self.thumbnail_list.item(row)
+        if item is not None:
+            self.thumbnail_list.scrollToItem(item)
+        self.syncing_thumbnails = False
+
+    def on_thumbnail_row_changed(self, row: int) -> None:
+        if self.syncing_thumbnails or row < 0 or row >= len(self.thumbnail_records):
+            return
+        self.owner.select_record(self.thumbnail_records[row])
 
     def create_shortcuts(self) -> None:
         self.decision_shortcuts: dict[str, QShortcut] = {}
@@ -216,16 +319,27 @@ class FloatingPreviewWindow(QWidget):
         self.owner.select_relative_record(1)
 
     def show_record(self, record: ImageRecord | None) -> None:
+        self.sync_thumbnail_selection(record)
         if record is None:
             self.preview.clear()
-            self.status_label.setText("선택된 이미지 없음")
+            self.filename_label.setText("선택된 이미지 없음")
+            self.filename_label.setToolTip("")
+            self.resolution_value.setText("-")
+            self.file_size_value.setText("-")
+            self.file_type_value.setText("-")
+            self.decision_value.setText("-")
             return
         self.preview.set_image(record.image_path)
         decision = self.owner.review_decisions.get(str(record.image_path), "")
         label = DECISION_LABELS.get(decision, "미결정")
-        self.status_label.setText(
-            f"{record.image_path.name} | {label} | ←/→ 이동 | A 이동 | D 삭제 예정 | S 보류"
-        )
+        size = f"{record.width}x{record.height}" if record.width and record.height else "unknown"
+        file_type = record.image_path.suffix.lstrip(".").upper() or "unknown"
+        self.filename_label.setText(record.image_path.name)
+        self.filename_label.setToolTip(record.image_path.name)
+        self.resolution_value.setText(size)
+        self.file_size_value.setText(format_file_size(record.file_size or 0))
+        self.file_type_value.setText(file_type)
+        self.decision_value.setText(label)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
