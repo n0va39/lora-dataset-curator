@@ -9,7 +9,7 @@ from pathlib import Path
 from .grouping import build_duplicate_groups
 from .hashing import compute_perceptual_hashes, compute_sha256
 from .models import DuplicateGroup, ImageRecord, SimilarityPair
-from .similarity import build_hash_pair, pair_key
+from .similarity import build_hash_pair, is_duplicate_candidate, pair_key
 
 ProgressCallback = Callable[[int, int, str], None]
 DEFAULT_MAX_PERCEPTUAL_PAIRS = 500_000
@@ -35,9 +35,6 @@ def analyze_duplicates(
     progress_callback: ProgressCallback | None = None,
 ) -> DuplicateAnalysisResult:
     pair_map: dict[tuple[str, str], SimilarityPair] = {}
-    if use_perceptual:
-        validate_perceptual_pair_limit(records, max_perceptual_pairs)
-
     progress = AnalysisProgress(records, use_sha256=use_sha256, use_perceptual=use_perceptual)
     progress.emit(progress_callback, "중복 분석을 시작했습니다.")
 
@@ -68,6 +65,7 @@ def analyze_duplicates(
             records,
             phash_threshold=phash_threshold,
             dhash_threshold=dhash_threshold,
+            max_candidate_pairs=max_perceptual_pairs,
             progress=progress,
             progress_callback=progress_callback,
         )
@@ -80,11 +78,18 @@ def analyze_duplicates(
         phash_threshold=phash_threshold,
         dhash_threshold=dhash_threshold,
     )
+    group_reasons = build_group_reasons(
+        groups,
+        pairs,
+        phash_threshold=phash_threshold,
+        dhash_threshold=dhash_threshold,
+    )
+    progress.complete(progress_callback, "중복 분석 완료")
     return DuplicateAnalysisResult(
         records=records,
         pairs=pairs,
         groups=groups,
-        group_reasons=build_group_reasons(groups, pairs),
+        group_reasons=group_reasons,
     )
 
 
@@ -93,6 +98,7 @@ class AnalysisProgress:
     records: list[ImageRecord]
     use_sha256: bool
     use_perceptual: bool
+    extra_total: int = 0
     current: int = 0
 
     @property
@@ -101,7 +107,8 @@ class AnalysisProgress:
         if self.use_sha256:
             total += sha256_candidate_count(self.records)
         if self.use_perceptual:
-            total += len(self.records) + pair_count(len(self.records))
+            total += len(self.records)
+        total += self.extra_total
         return max(total, 1)
 
     def advance(self, progress_callback: ProgressCallback | None, message: str) -> None:
@@ -112,23 +119,13 @@ class AnalysisProgress:
         if progress_callback is not None:
             progress_callback(min(self.current, self.total), self.total, message)
 
+    def complete(self, progress_callback: ProgressCallback | None, message: str) -> None:
+        self.current = self.total
+        self.emit(progress_callback, message)
+
 
 def pair_count(count: int) -> int:
     return count * (count - 1) // 2
-
-
-def validate_perceptual_pair_limit(
-    records: list[ImageRecord],
-    max_perceptual_pairs: int,
-) -> None:
-    total_pairs = pair_count(len(records))
-    if total_pairs > max_perceptual_pairs:
-        raise ValueError(
-            "pHash/dHash comparison would require "
-            f"{total_pairs:,} image pairs. "
-            "Use a smaller dataset, disable pHash/dHash, or raise "
-            f"the pair limit above {max_perceptual_pairs:,}."
-        )
 
 
 def sha256_candidate_count(records: Iterable[ImageRecord]) -> int:
@@ -208,6 +205,7 @@ def add_perceptual_pairs(
     *,
     phash_threshold: int,
     dhash_threshold: int,
+    max_candidate_pairs: int,
     progress: AnalysisProgress | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
@@ -224,9 +222,25 @@ def add_perceptual_pairs(
                     f"pHash/dHash 계산 중: {record.image_path.name}",
                 )
 
-    total_pairs = pair_count(len(records))
+    candidate_pairs = build_perceptual_candidate_pairs(
+        records,
+        hashes,
+        threshold=max(phash_threshold, dhash_threshold),
+    )
+    if len(candidate_pairs) > max_candidate_pairs:
+        raise ValueError(
+            "pHash/dHash candidate search produced "
+            f"{len(candidate_pairs):,} image pairs. "
+            "Use a smaller dataset, lower thresholds, or raise "
+            f"the pair limit above {max_candidate_pairs:,}."
+        )
+    if progress is not None:
+        progress.extra_total += len(candidate_pairs)
+        progress.emit(progress_callback, "pHash/dHash 후보를 비교하는 중입니다.")
+
+    total_pairs = len(candidate_pairs)
     last_progress_index = 0
-    for index, (record_a, record_b) in enumerate(combinations(records, 2), start=1):
+    for index, (record_a, record_b) in enumerate(candidate_pairs, start=1):
         hashes_a = hashes.get(record_a.image_path)
         hashes_b = hashes.get(record_b.image_path)
         if hashes_a is not None and hashes_b is not None:
@@ -257,6 +271,55 @@ def add_perceptual_pairs(
             )
 
 
+def build_perceptual_candidate_pairs(
+    records: list[ImageRecord],
+    hashes: dict[Path, dict[str, str]],
+    *,
+    threshold: int,
+) -> list[tuple[ImageRecord, ImageRecord]]:
+    segment_count = segment_count_for_threshold(threshold)
+    buckets: dict[tuple[str, int, str], list[ImageRecord]] = defaultdict(list)
+    for record in records:
+        record_hashes = hashes.get(record.image_path)
+        if record_hashes is None:
+            continue
+        for hash_name in ("phash", "dhash"):
+            hash_value = record_hashes.get(hash_name)
+            if not hash_value:
+                continue
+            for index, segment in enumerate(split_hash_segments(hash_value, segment_count)):
+                buckets[(hash_name, index, segment)].append(record)
+
+    candidate_keys: set[tuple[str, str]] = set()
+    record_by_path = {record.image_path: record for record in records}
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        for record_a, record_b in combinations(bucket, 2):
+            candidate_keys.add(pair_key(record_a.image_path, record_b.image_path))
+
+    return [
+        (record_by_path[Path(left)], record_by_path[Path(right)])
+        for left, right in sorted(candidate_keys)
+    ]
+
+
+def segment_count_for_threshold(threshold: int) -> int:
+    if threshold <= 7:
+        return 8
+    if threshold <= 15:
+        return 16
+    raise ValueError("pHash/dHash bucket search supports thresholds up to 15")
+
+
+def split_hash_segments(hash_value: str, segment_count: int) -> list[str]:
+    segment_length = max(len(hash_value) // segment_count, 1)
+    return [
+        hash_value[index : index + segment_length]
+        for index in range(0, len(hash_value), segment_length)
+    ][:segment_count]
+
+
 def should_emit_pair_progress(index: int, total: int) -> bool:
     return index == 1 or index == total or index % 1000 == 0
 
@@ -277,18 +340,30 @@ def get_or_create_pair(
 def build_group_reasons(
     groups: list[DuplicateGroup],
     pairs: list[SimilarityPair],
+    *,
+    phash_threshold: int = 6,
+    dhash_threshold: int = 6,
 ) -> dict[str, list[str]]:
-    pair_by_key = {pair_key(pair.image_a, pair.image_b): pair for pair in pairs}
-    reasons: dict[str, list[str]] = {}
+    group_by_path: dict[Path, str] = {}
+    reasons: dict[str, set[str]] = {}
     for group in groups:
-        group_reasons: set[str] = set()
-        for record_a, record_b in combinations(group.images, 2):
-            pair = pair_by_key.get(pair_key(record_a.image_path, record_b.image_path))
-            if pair is None:
-                continue
-            group_reasons.update(pair_reasons(pair))
-        reasons[group.group_id] = sorted(group_reasons)
-    return reasons
+        reasons[group.group_id] = set()
+        for record in group.images:
+            group_by_path[record.image_path] = group.group_id
+
+    for pair in pairs:
+        group_id = group_by_path.get(pair.image_a)
+        if group_id is None or group_id != group_by_path.get(pair.image_b):
+            continue
+        if not is_duplicate_candidate(
+            pair,
+            phash_threshold=phash_threshold,
+            dhash_threshold=dhash_threshold,
+        ):
+            continue
+        reasons[group_id].update(pair_reasons(pair))
+
+    return {group_id: sorted(group_reasons) for group_id, group_reasons in reasons.items()}
 
 
 def pair_reasons(pair: SimilarityPair) -> list[str]:

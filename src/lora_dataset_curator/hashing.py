@@ -22,7 +22,7 @@ def compute_file_md5(path: Path | str, *, chunk_size: int = 1024 * 1024) -> str:
 
 
 def compute_perceptual_hashes(path: Path | str) -> dict[str, str]:
-    """Compute perceptual hashes when optional imagehash dependency is installed."""
+    """Compute perceptual hashes used by duplicate analysis."""
 
     try:
         import imagehash
@@ -31,12 +31,11 @@ def compute_perceptual_hashes(path: Path | str) -> dict[str, str]:
         raise RuntimeError("Install the image extra to use perceptual hashing") from exc
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        warnings.simplefilter("ignore")
         with Image.open(path) as image:
             return {
                 "phash": str(imagehash.phash(image)),
                 "dhash": str(imagehash.dhash(image)),
-                "whash": str(imagehash.whash(image)),
             }
 
 

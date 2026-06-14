@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QObject, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QAction, QDesktopServices, QPixmap
+from PySide6.QtGui import QAction, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -36,12 +36,59 @@ from lora_dataset_curator.duplicate_analysis import (
     DEFAULT_MAX_PERCEPTUAL_PAIRS,
     DuplicateAnalysisResult,
     analyze_duplicates,
-    pair_count,
 )
 from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
 
 ProgressCallback = Callable[[int, int, str], None]
+
+
+class ImagePreview(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pixmap = QPixmap()
+        self.message = "선택된 이미지 없음"
+        self.setMinimumSize(320, 220)
+        self.setMaximumHeight(320)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_image(self, path: Path) -> None:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.pixmap = QPixmap()
+            self.message = "미리보기를 표시할 수 없습니다."
+        else:
+            self.pixmap = pixmap
+            self.message = ""
+        self.update()
+
+    def clear(self) -> None:
+        self.pixmap = QPixmap()
+        self.message = "선택된 이미지 없음"
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.palette().base())
+        painter.setPen(self.palette().mid().color())
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+        content_rect = self.rect().adjusted(8, 8, -8, -8)
+        if self.pixmap.isNull():
+            painter.setPen(self.palette().text().color())
+            painter.drawText(content_rect, Qt.AlignmentFlag.AlignCenter, self.message)
+            return
+
+        scaled = self.pixmap.scaled(
+            content_rect.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = content_rect.x() + (content_rect.width() - scaled.width()) // 2
+        y = content_rect.y() + (content_rect.height() - scaled.height()) // 2
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawPixmap(x, y, scaled)
 
 
 class TaskWorker(QObject):
@@ -87,14 +134,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.preview_label = QLabel("선택된 이미지 없음")
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(360, 300)
-        self.preview_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Ignored,
-        )
-        self.preview_label.setStyleSheet("border: 1px solid #bbb; background: #fafafa;")
+        self.preview_label = ImagePreview()
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
@@ -381,25 +421,14 @@ class MainWindow(QMainWindow):
 
     def clear_details(self) -> None:
         self.current_record = None
-        self.preview_label.setText("선택된 이미지 없음")
-        self.preview_label.setPixmap(QPixmap())
+        self.preview_label.clear()
         self.caption_text.clear()
         self.metadata_text.clear()
         self.info_text.clear()
         self.plan_text.clear()
 
     def load_preview(self, path: Path) -> None:
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            self.preview_label.setText("미리보기를 표시할 수 없습니다.")
-            self.preview_label.setPixmap(QPixmap())
-            return
-        scaled = pixmap.scaled(
-            self.preview_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.preview_label.setPixmap(scaled)
+        self.preview_label.set_image(path)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -432,15 +461,12 @@ class MainWindow(QMainWindow):
             return
 
         use_perceptual = self.use_perceptual_checkbox.isChecked()
-        total_pairs = pair_count(len(self.records))
-        if use_perceptual and total_pairs > DEFAULT_MAX_PERCEPTUAL_PAIRS:
+        if use_perceptual and max(self.phash_threshold.value(), self.dhash_threshold.value()) > 15:
             QMessageBox.warning(
                 self,
                 "pHash/dHash 분석 제한",
-                "pHash/dHash는 모든 이미지 쌍을 비교합니다.\n"
-                f"현재 데이터셋은 {total_pairs:,}개 쌍이 필요해서 "
-                f"기본 제한 {DEFAULT_MAX_PERCEPTUAL_PAIRS:,}개를 초과합니다.\n"
-                "우선 pHash/dHash를 끄고 metadata/SHA256 기준으로 분석하세요.",
+                "현재 bucket 후보 검색은 pHash/dHash 기준값 15까지만 지원합니다.\n"
+                "기준값을 낮춘 뒤 다시 실행하세요.",
             )
             return
 
@@ -599,6 +625,8 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "작업 실패", message)
 
     def update_progress(self, current: int, total: int, message: str) -> None:
+        if self.active_thread is None:
+            return
         if total <= 0:
             self.progress_bar.setRange(0, 0)
         else:

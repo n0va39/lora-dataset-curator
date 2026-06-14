@@ -51,7 +51,8 @@ def test_analyze_duplicates_reports_progress(tmp_path):
 
     assert result.records == records
     assert progress
-    assert progress[-1][1] >= 1
+    assert progress[-1][0] == progress[-1][1]
+    assert progress[-1][2] == "중복 분석 완료"
 
 
 def test_analyze_duplicates_hashes_only_same_size_candidates(tmp_path, monkeypatch):
@@ -78,13 +79,17 @@ def test_analyze_duplicates_hashes_only_same_size_candidates(tmp_path, monkeypat
     assert sorted(hashed_paths) == ["a.png", "b.png"]
 
 
-def test_analyze_duplicates_limits_large_perceptual_pair_counts(tmp_path):
+def test_analyze_duplicates_limits_large_perceptual_pair_counts(tmp_path, monkeypatch):
     for name in ("a.png", "b.png", "c.png"):
         Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
 
+    def fake_perceptual_hashes(path):
+        return {"phash": "0000000000000000", "dhash": "0000000000000000"}
+
+    monkeypatch.setattr(duplicate_analysis, "compute_perceptual_hashes", fake_perceptual_hashes)
     records = scan_dataset(tmp_path)
 
-    with pytest.raises(ValueError, match="pHash/dHash comparison"):
+    with pytest.raises(ValueError, match="candidate search"):
         analyze_duplicates(
             records,
             use_sha256=False,
@@ -92,3 +97,33 @@ def test_analyze_duplicates_limits_large_perceptual_pair_counts(tmp_path):
             use_perceptual=True,
             max_perceptual_pairs=1,
         )
+
+
+def test_analyze_duplicates_groups_perceptual_bucket_candidates(tmp_path, monkeypatch):
+    for name in ("a.png", "b.png", "c.png"):
+        Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
+
+    hash_by_name = {
+        "a.png": {"phash": "0011223344556677", "dhash": "0011223344556677"},
+        "b.png": {"phash": "0011223344556676", "dhash": "0011223344556676"},
+        "c.png": {"phash": "ffeeddccbbaa9988", "dhash": "ffeeddccbbaa9988"},
+    }
+
+    monkeypatch.setattr(
+        duplicate_analysis,
+        "compute_perceptual_hashes",
+        lambda path: hash_by_name[path.name],
+    )
+
+    records = scan_dataset(tmp_path)
+    result = analyze_duplicates(
+        records,
+        use_sha256=False,
+        use_metadata=False,
+        use_perceptual=True,
+        phash_threshold=1,
+        dhash_threshold=1,
+    )
+
+    assert len(result.groups) == 1
+    assert {record.image_path.name for record in result.groups[0].images} == {"a.png", "b.png"}

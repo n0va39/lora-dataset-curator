@@ -77,11 +77,16 @@ def test_duplicates_cli_prints_groups(tmp_path, capsys):
     assert "post-id" in output
 
 
-def test_duplicates_cli_reports_perceptual_pair_limit(tmp_path):
+def test_duplicates_cli_reports_perceptual_pair_limit(tmp_path, monkeypatch):
     for name in ("a.png", "b.png", "c.png"):
         Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
 
-    with pytest.raises(SystemExit, match="pHash/dHash comparison"):
+    def fake_analyze_duplicates(*args, **kwargs):
+        raise ValueError("pHash/dHash candidate search produced 2 image pairs.")
+
+    monkeypatch.setattr(cli_app, "analyze_duplicates", fake_analyze_duplicates)
+
+    with pytest.raises(SystemExit, match="candidate search"):
         cli_app.main(
             [
                 "duplicates",

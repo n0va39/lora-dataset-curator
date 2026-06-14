@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from PIL import Image
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+QtCore = pytest.importorskip("PySide6.QtCore")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
+from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
 from lora_dataset_curator.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -60,5 +63,49 @@ def test_progress_bar_stays_visible_on_duplicate_tab(tmp_path):
     assert window.status_label.isVisible()
     assert window.review_splitter.sizes()[0] > window.review_splitter.sizes()[1]
     assert window.duplicate_splitter.sizes()[1] > window.duplicate_splitter.sizes()[0]
+
+    window.close()
+
+
+def test_preview_widget_does_not_overlap_file_info(tmp_path):
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (800, 1200), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.resize(1100, 720)
+    window.show()
+    app.processEvents()
+
+    preview_bottom = window.preview_label.mapTo(
+        window,
+        QtCore.QPoint(0, window.preview_label.height()),
+    ).y()
+    info_top = window.info_text.mapTo(window, QtCore.QPoint(0, 0)).y()
+
+    assert preview_bottom <= info_top
+    assert window.preview_label.height() <= window.preview_label.maximumHeight()
+
+    window.close()
+
+
+def test_background_duplicate_analysis_completes_for_no_candidate_dataset(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (17, 8), color="blue").save(tmp_path / "b.png")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(output_dir=tmp_path / "out", background_tasks=True)
+    window.finish_scan(scan_dataset(tmp_path))
+    window.analyze_duplicate_groups()
+
+    deadline = time.monotonic() + 5
+    while window.active_thread is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
+
+    assert window.active_thread is None
+    assert window.group_table.rowCount() == 0
+    assert window.status_label.text() == "완료"
 
     window.close()
