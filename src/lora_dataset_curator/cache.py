@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from .models import DuplicateGroup, ImageRecord, SimilarityPair
@@ -44,7 +45,8 @@ class HashCache:
         self.root = Path(input_root).expanduser().resolve()
         self.path = hashes_path(self.root)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path)
+        self.lock = RLock()
+        self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.ensure_schema()
 
     def __enter__(self) -> HashCache:
@@ -57,31 +59,44 @@ class HashCache:
         self.connection.close()
 
     def ensure_schema(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS image_hashes (
-                path TEXT PRIMARY KEY,
-                size INTEGER NOT NULL,
-                mtime_ns INTEGER NOT NULL,
-                sha256 TEXT,
-                phash TEXT,
-                dhash TEXT,
-                version INTEGER NOT NULL,
-                updated_at TEXT NOT NULL
+        with self.lock:
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS image_hashes (
+                    path TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    sha256 TEXT,
+                    phash TEXT,
+                    dhash TEXT,
+                    version INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self.connection.commit()
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS content_hashes (
+                    sha256 TEXT PRIMARY KEY,
+                    phash TEXT,
+                    dhash TEXT,
+                    version INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self.connection.commit()
 
     def load(self, record: ImageRecord) -> CachedHashes | None:
-        row = self.connection.execute(
-            """
-            SELECT size, mtime_ns, sha256, phash, dhash, version
-            FROM image_hashes
-            WHERE path = ?
-            """,
-            (self.cache_key(record.image_path),),
-        ).fetchone()
+        with self.lock:
+            row = self.connection.execute(
+                """
+                SELECT size, mtime_ns, sha256, phash, dhash, version
+                FROM image_hashes
+                WHERE path = ?
+                """,
+                (self.cache_key(record.image_path),),
+            ).fetchone()
         if row is None:
             return None
         size, mtime_ns, sha256, phash, dhash, version = row
@@ -89,6 +104,29 @@ class HashCache:
             return None
         fingerprint = file_fingerprint(record.image_path)
         if size != fingerprint["size"] or mtime_ns != fingerprint["mtime_ns"]:
+            return None
+        cached = CachedHashes(sha256=sha256, phash=phash, dhash=dhash)
+        if sha256:
+            content_cached = self.load_by_sha256(sha256)
+            if content_cached is not None:
+                cached.phash = content_cached.phash or cached.phash
+                cached.dhash = content_cached.dhash or cached.dhash
+        return cached
+
+    def load_by_sha256(self, sha256: str) -> CachedHashes | None:
+        with self.lock:
+            row = self.connection.execute(
+                """
+                SELECT phash, dhash, version
+                FROM content_hashes
+                WHERE sha256 = ?
+                """,
+                (sha256,),
+            ).fetchone()
+        if row is None:
+            return None
+        phash, dhash, version = row
+        if version != HASH_CACHE_VERSION:
             return None
         return CachedHashes(sha256=sha256, phash=phash, dhash=dhash)
 
@@ -100,40 +138,61 @@ class HashCache:
         phash: str | None = None,
         dhash: str | None = None,
     ) -> None:
-        existing = self.load(record)
-        fingerprint = file_fingerprint(record.image_path)
-        values = CachedHashes(
-            sha256=sha256 if sha256 is not None else existing.sha256 if existing else None,
-            phash=phash if phash is not None else existing.phash if existing else None,
-            dhash=dhash if dhash is not None else existing.dhash if existing else None,
-        )
-        self.connection.execute(
-            """
-            INSERT INTO image_hashes (
-                path, size, mtime_ns, sha256, phash, dhash, version, updated_at
+        with self.lock:
+            existing = self.load(record)
+            fingerprint = file_fingerprint(record.image_path)
+            values = CachedHashes(
+                sha256=sha256 if sha256 is not None else existing.sha256 if existing else None,
+                phash=phash if phash is not None else existing.phash if existing else None,
+                dhash=dhash if dhash is not None else existing.dhash if existing else None,
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(path) DO UPDATE SET
-                size = excluded.size,
-                mtime_ns = excluded.mtime_ns,
-                sha256 = excluded.sha256,
-                phash = excluded.phash,
-                dhash = excluded.dhash,
-                version = excluded.version,
-                updated_at = excluded.updated_at
-            """,
-            (
-                self.cache_key(record.image_path),
-                fingerprint["size"],
-                fingerprint["mtime_ns"],
-                values.sha256,
-                values.phash,
-                values.dhash,
-                HASH_CACHE_VERSION,
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        self.connection.commit()
+            updated_at = datetime.now(UTC).isoformat()
+            self.connection.execute(
+                """
+                INSERT INTO image_hashes (
+                    path, size, mtime_ns, sha256, phash, dhash, version, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size = excluded.size,
+                    mtime_ns = excluded.mtime_ns,
+                    sha256 = excluded.sha256,
+                    phash = excluded.phash,
+                    dhash = excluded.dhash,
+                    version = excluded.version,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    self.cache_key(record.image_path),
+                    fingerprint["size"],
+                    fingerprint["mtime_ns"],
+                    values.sha256,
+                    values.phash,
+                    values.dhash,
+                    HASH_CACHE_VERSION,
+                    updated_at,
+                ),
+            )
+            if values.sha256 and (values.phash or values.dhash):
+                self.connection.execute(
+                    """
+                    INSERT INTO content_hashes (sha256, phash, dhash, version, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(sha256) DO UPDATE SET
+                        phash = excluded.phash,
+                        dhash = excluded.dhash,
+                        version = excluded.version,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        values.sha256,
+                        values.phash,
+                        values.dhash,
+                        HASH_CACHE_VERSION,
+                        updated_at,
+                    ),
+                )
+            self.connection.commit()
 
     def cache_key(self, path: Path) -> str:
         resolved = path.expanduser().resolve()

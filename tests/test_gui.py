@@ -149,6 +149,20 @@ def test_duplicate_groups_are_loaded_from_cache(tmp_path, monkeypatch):
     cached_window.close()
 
 
+def test_prepare_cache_button_creates_hash_cache(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.prepare_duplicate_cache()
+
+    assert app is not None
+    assert (tmp_path / ".lora_dataset_curator" / "hashes.sqlite").exists()
+    assert "캐시 준비 완료" in window.duplicate_summary_label.text()
+
+    window.close()
+
+
 def test_execute_review_decisions_moves_linked_files(tmp_path, monkeypatch):
     image_path = tmp_path / "a.png"
     caption_path = tmp_path / "a.txt"

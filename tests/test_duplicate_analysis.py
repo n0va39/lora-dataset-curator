@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from lora_dataset_curator import duplicate_analysis
-from lora_dataset_curator.duplicate_analysis import analyze_duplicates
+from lora_dataset_curator.duplicate_analysis import analyze_duplicates, prepare_hash_cache
 from lora_dataset_curator.scanner import scan_dataset
 
 
@@ -168,3 +168,34 @@ def test_analyze_duplicates_reuses_perceptual_hash_cache(tmp_path, monkeypatch):
     )
 
     assert len(cached_result.groups) == 1
+
+
+def test_perceptual_hash_cache_survives_image_move(tmp_path, monkeypatch):
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
+
+    monkeypatch.setattr(
+        duplicate_analysis,
+        "compute_perceptual_hashes",
+        lambda path: {"phash": "0000000000000000", "dhash": "0000000000000000"},
+    )
+    prepare_hash_cache(scan_dataset(tmp_path), hash_cache_root=tmp_path)
+
+    moved_dir = tmp_path / "moved"
+    moved_dir.mkdir()
+    shutil.move(tmp_path / "b.png", moved_dir / "b.png")
+
+    def fail_perceptual_hashes(path):
+        raise AssertionError("content hash cache was not used")
+
+    monkeypatch.setattr(duplicate_analysis, "compute_perceptual_hashes", fail_perceptual_hashes)
+    result = analyze_duplicates(
+        scan_dataset(tmp_path),
+        use_sha256=False,
+        use_metadata=False,
+        use_perceptual=True,
+        hash_cache_root=tmp_path,
+    )
+
+    assert len(result.groups) == 1
+    assert {record.image_path.name for record in result.groups[0].images} == {"a.png", "b.png"}

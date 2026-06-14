@@ -27,6 +27,54 @@ class DuplicateAnalysisResult:
     group_reasons: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class CachePreparationProgress:
+    total: int
+    current: int = 0
+
+    def advance(self, progress_callback: ProgressCallback | None, message: str) -> None:
+        self.current += 1
+        self.emit(progress_callback, message)
+
+    def emit(self, progress_callback: ProgressCallback | None, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(min(self.current, self.total), self.total, message)
+
+    def complete(self, progress_callback: ProgressCallback | None, message: str) -> None:
+        self.current = self.total
+        self.emit(progress_callback, message)
+
+
+def prepare_hash_cache(
+    records: list[ImageRecord],
+    *,
+    hash_cache_root: Path | str,
+    include_perceptual: bool = True,
+    max_workers: int | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
+    total = len(records) + (len(records) if include_perceptual else 0)
+    progress = CachePreparationProgress(total=max(total, 1))
+    progress.emit(progress_callback, "해시 캐시 준비를 시작했습니다.")
+    with HashCache(hash_cache_root) as hash_cache:
+        attach_sha256(
+            records,
+            max_workers=max_workers,
+            hash_cache=hash_cache,
+            progress=progress,
+            progress_callback=progress_callback,
+        )
+        if include_perceptual:
+            compute_perceptual_hash_map(
+                records,
+                max_workers=max_workers,
+                hash_cache=hash_cache,
+                progress=progress,
+                progress_callback=progress_callback,
+            )
+    progress.complete(progress_callback, "해시 캐시 준비 완료")
+
+
 def analyze_duplicates(
     records: list[ImageRecord],
     *,
@@ -369,6 +417,14 @@ def compute_perceptual_hash_map(
     progress: AnalysisProgress | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[Path, dict[str, str]]:
+    if hash_cache is not None:
+        attach_sha256(
+            records,
+            max_workers=max_workers,
+            hash_cache=hash_cache,
+            progress=None,
+            progress_callback=None,
+        )
     cached_hashes, pending_records = load_cached_perceptual_hashes(
         records,
         hash_cache=hash_cache,
@@ -428,6 +484,15 @@ def load_cached_perceptual_hashes(
     pending_records: list[ImageRecord] = []
     for record in records:
         cached = hash_cache.load(record) if hash_cache is not None else None
+        if (
+            cached is not None
+            and cached.sha256
+            and (not cached.phash or not cached.dhash)
+        ):
+            content_cached = hash_cache.load_by_sha256(cached.sha256)
+            if content_cached is not None:
+                cached.phash = content_cached.phash or cached.phash
+                cached.dhash = content_cached.dhash or cached.dhash
         if cached is not None and cached.phash and cached.dhash:
             hashes[record.image_path] = {"phash": cached.phash, "dhash": cached.dhash}
             if progress is not None:

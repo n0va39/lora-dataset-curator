@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 
 from .actions import build_action_plan
-from .duplicate_analysis import DEFAULT_MAX_PERCEPTUAL_PAIRS, analyze_duplicates
+from .duplicate_analysis import (
+    DEFAULT_MAX_PERCEPTUAL_PAIRS,
+    analyze_duplicates,
+    prepare_hash_cache,
+)
 from .models import DuplicateGroup
 from .scanner import scan_dataset
 
@@ -58,6 +62,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     duplicates_parser.add_argument("--json", action="store_true", help="Print groups as JSON")
+
+    cache_parser = subparsers.add_parser(
+        "prepare-cache",
+        help="Precompute SHA256 and perceptual hashes for a dataset",
+    )
+    cache_parser.add_argument("input_dir", type=Path)
+    cache_parser.add_argument(
+        "--no-perceptual",
+        action="store_true",
+        help="Only prepare SHA256 values",
+    )
+    cache_parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Worker threads for hash calculation (default: CPU based)",
+    )
 
     return parser
 
@@ -172,6 +193,19 @@ def handle_duplicates(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_prepare_cache(args: argparse.Namespace) -> int:
+    records = scan_dataset(args.input_dir)
+    prepare_hash_cache(
+        records,
+        hash_cache_root=args.input_dir,
+        include_perceptual=not args.no_perceptual,
+        max_workers=args.workers,
+    )
+    print(f"Prepared hash cache for {len(records)} images")
+    print(f"Cache: {args.input_dir / '.lora_dataset_curator' / 'hashes.sqlite'}")
+    return 0
+
+
 def duplicate_group_summary(
     group: DuplicateGroup,
     group_reasons: dict[str, list[str]],
@@ -203,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_gui(args)
     if args.command == "duplicates":
         return handle_duplicates(args)
+    if args.command == "prepare-cache":
+        return handle_prepare_cache(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

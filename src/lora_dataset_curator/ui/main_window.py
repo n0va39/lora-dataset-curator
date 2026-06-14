@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,6 +55,7 @@ from lora_dataset_curator.duplicate_analysis import (
     DEFAULT_MAX_PERCEPTUAL_PAIRS,
     DuplicateAnalysisResult,
     analyze_duplicates,
+    prepare_hash_cache,
 )
 from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
@@ -245,8 +247,8 @@ class TaskWorker(QObject):
     def run(self) -> None:
         try:
             self.finished.emit(self.task(self.progress.emit))
-        except Exception as exc:
-            self.failed.emit(str(exc))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
 
 
 class MainWindow(QMainWindow):
@@ -441,11 +443,14 @@ class MainWindow(QMainWindow):
     def build_duplicate_tab(self) -> QWidget:
         self.analyze_button = QPushButton("분석")
         self.analyze_button.clicked.connect(self.analyze_duplicate_groups)
+        self.prepare_cache_button = QPushButton("캐시 준비")
+        self.prepare_cache_button.clicked.connect(self.prepare_duplicate_cache)
 
         controls_widget = QWidget()
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.addWidget(self.analyze_button)
+        controls.addWidget(self.prepare_cache_button)
         controls.addWidget(self.use_perceptual_checkbox)
         controls.addWidget(QLabel("pHash 기준"))
         controls.addWidget(self.phash_threshold)
@@ -804,6 +809,38 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "실행 완료", f"{moved_count}개 이미지 결정을 실행했습니다.")
         self.scan()
 
+    def prepare_duplicate_cache(self) -> None:
+        if not self.records:
+            QMessageBox.information(self, "캐시 준비", "먼저 데이터셋을 스캔하세요.")
+            return
+
+        input_dir = Path(self.input_path.text()).expanduser()
+        include_perceptual = self.use_perceptual_checkbox.isChecked()
+        if self.background_tasks:
+            self.start_background_task(
+                lambda progress_callback: prepare_hash_cache(
+                    self.records,
+                    hash_cache_root=input_dir,
+                    include_perceptual=include_perceptual,
+                    progress_callback=progress_callback,
+                ),
+                self.finish_prepare_cache,
+                "해시 캐시 준비를 시작했습니다.",
+            )
+            return
+
+        prepare_hash_cache(
+            self.records,
+            hash_cache_root=input_dir,
+            include_perceptual=include_perceptual,
+        )
+        self.finish_prepare_cache(None)
+
+    def finish_prepare_cache(self, _result: object) -> None:
+        self.duplicate_summary_label.setText(
+            f"캐시 준비 완료: {len(self.records)}개 이미지"
+        )
+
     def analyze_duplicate_groups(self) -> None:
         if not self.records:
             QMessageBox.information(self, "중복 분석", "먼저 데이터셋을 스캔하세요.")
@@ -1045,7 +1082,11 @@ class MainWindow(QMainWindow):
         result: object,
         on_finished: Callable[[object], None],
     ) -> None:
-        on_finished(result)
+        try:
+            on_finished(result)
+        except Exception:
+            self.fail_background_task(traceback.format_exc())
+            return
         self.set_busy(False, "완료")
         self.active_thread = None
         self.active_worker = None
@@ -1069,6 +1110,7 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy: bool, message: str) -> None:
         self.scan_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy)
+        self.prepare_cache_button.setEnabled(not busy)
         self.execute_button.setEnabled(not busy)
         self.status_label.setText(message)
         if busy:
