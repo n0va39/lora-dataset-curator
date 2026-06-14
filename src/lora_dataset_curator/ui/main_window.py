@@ -6,7 +6,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QObject, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -174,6 +183,26 @@ class FloatingPreviewWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.preview, stretch=1)
         layout.addWidget(self.status_label)
+        self.create_shortcuts()
+
+    def create_shortcuts(self) -> None:
+        self.decision_shortcuts: dict[str, QShortcut] = {}
+        for key, action in (("A", "move"), ("D", "delete"), ("S", "skip")):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(lambda name=action: self.apply_decision_shortcut(name))
+            self.decision_shortcuts[action] = shortcut
+
+        self.next_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        self.next_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.next_shortcut.activated.connect(lambda: self.owner.select_relative_record(1))
+        self.previous_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        self.previous_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.previous_shortcut.activated.connect(lambda: self.owner.select_relative_record(-1))
+
+    def apply_decision_shortcut(self, action: str) -> None:
+        self.owner.set_current_decision(action)
+        self.owner.select_relative_record(1)
 
     def show_record(self, record: ImageRecord | None) -> None:
         if record is None:
@@ -264,6 +293,8 @@ class MainWindow(QMainWindow):
 
         self.caption_text = QPlainTextEdit()
         self.caption_text.setReadOnly(True)
+        self.caption_meta_label = QLabel("")
+        self.caption_meta_label.setWordWrap(True)
         self.metadata_text = QPlainTextEdit()
         self.metadata_text.setReadOnly(True)
         self.info_text = QPlainTextEdit()
@@ -307,6 +338,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.build_layout())
         self.create_menu()
+        self.create_shortcuts()
 
         if input_dir is not None:
             self.scan()
@@ -373,6 +405,7 @@ class MainWindow(QMainWindow):
         caption_layout = QVBoxLayout(caption_panel)
         caption_layout.addWidget(QLabel("캡션"))
         caption_layout.addWidget(self.caption_text)
+        caption_layout.addWidget(self.caption_meta_label)
 
         metadata_panel = QWidget()
         metadata_layout = QVBoxLayout(metadata_panel)
@@ -507,6 +540,25 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+    def create_shortcuts(self) -> None:
+        self.decision_shortcuts: dict[str, QShortcut] = {}
+        for key, action in (("A", "move"), ("D", "delete"), ("S", "skip")):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(lambda name=action: self.apply_decision_shortcut(name))
+            self.decision_shortcuts[action] = shortcut
+
+        self.next_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        self.next_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.next_shortcut.activated.connect(lambda: self.select_relative_record(1))
+        self.previous_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        self.previous_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.previous_shortcut.activated.connect(lambda: self.select_relative_record(-1))
+
+    def apply_decision_shortcut(self, action: str) -> None:
+        self.set_current_decision(action)
+        self.select_relative_record(1)
+
     def choose_input_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self,
@@ -603,6 +655,7 @@ class MainWindow(QMainWindow):
         self.current_record = record
         self.plan_text.clear()
         self.caption_text.setPlainText(record.caption_text)
+        self.caption_meta_label.setText(self.format_caption_meta(record))
         self.metadata_text.setPlainText(
             json.dumps(record.raw_metadata, ensure_ascii=False, indent=2)
             if record.raw_metadata
@@ -617,6 +670,7 @@ class MainWindow(QMainWindow):
         self.current_record = None
         self.preview_label.clear()
         self.caption_text.clear()
+        self.caption_meta_label.clear()
         self.metadata_text.clear()
         self.info_text.clear()
         self.plan_text.clear()
@@ -1055,6 +1109,23 @@ class MainWindow(QMainWindow):
     def output_root(self) -> Path:
         return Path(self.output_path.text()).expanduser().resolve()
 
+    def format_caption_meta(self, record: ImageRecord) -> str:
+        size = f"{record.width}x{record.height}" if record.width and record.height else "unknown"
+        file_size = format_file_size(record.file_size or 0)
+        group_id = self.record_group_ids.get(record.image_path, "그룹 없음")
+        decision = DECISION_LABELS.get(
+            self.review_decisions.get(str(record.image_path), ""),
+            "미결정",
+        )
+        sidecars = [
+            "txt 있음" if record.caption_path else "txt 없음",
+            "json 있음" if record.metadata_path else "json 없음",
+        ]
+        return (
+            f"크기: {size} | 용량: {file_size} | {group_id} | "
+            f"결정: {decision} | {', '.join(sidecars)}"
+        )
+
     @staticmethod
     def format_info(record: ImageRecord) -> str:
         lines = [
@@ -1073,6 +1144,16 @@ class MainWindow(QMainWindow):
             f"일반 태그: {', '.join(record.tags_general[:80])}",
         ]
         return "\n".join(lines)
+
+
+def format_file_size(size: int) -> str:
+    units = ("B", "KB", "MB", "GB")
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{size} B"
 
 
 def run_gui(input_dir: Path | None = None, output_dir: Path | None = None) -> int:

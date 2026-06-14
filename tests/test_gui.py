@@ -91,6 +91,38 @@ def test_review_decisions_are_saved_and_loaded(tmp_path):
     next_window.close()
 
 
+def test_caption_meta_shows_size_and_file_size(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (16, 8), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+
+    assert app is not None
+    assert "크기: 16x8" in window.caption_meta_label.text()
+    assert "용량:" in window.caption_meta_label.text()
+
+    window.close()
+
+
+def test_decision_shortcuts_apply_even_with_child_focus(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 8), color="blue").save(tmp_path / "b.png")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.caption_text.setFocus()
+
+    window.decision_shortcuts["move"].activated.emit()
+
+    assert app is not None
+    assert window.review_decisions[str(tmp_path / "a.png")] == "move"
+    assert window.current_record is not None
+    assert window.current_record.image_path == tmp_path / "b.png"
+
+    window.close()
+
+
 def test_duplicate_groups_are_loaded_from_cache(tmp_path, monkeypatch):
     Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
     Image.new("RGB", (16, 8), color="blue").save(tmp_path / "b.png")
