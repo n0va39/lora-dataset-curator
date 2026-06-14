@@ -84,6 +84,8 @@ class SimilarityPair:
     image_b: Path
     sha256_match: bool = False
     md5_match: bool = False
+    post_id_match: bool = False
+    source_url_match: bool = False
     phash_distance: int | None = None
     dhash_distance: int | None = None
     ssim_score: float | None = None

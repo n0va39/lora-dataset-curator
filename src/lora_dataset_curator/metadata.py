@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 def read_caption(path: Path | None) -> str:
@@ -73,5 +74,7 @@ def extract_tag_categories(metadata: Mapping[str, Any]) -> dict[str, list[str]]:
         "general": split_tag_string(
             first_existing(metadata, ("tag_string_general", "tags_general", "general_tags"))
         ),
-        "meta": split_tag_string(first_existing(metadata, ("tag_string_meta", "tags_meta", "meta_tags"))),
+        "meta": split_tag_string(
+            first_existing(metadata, ("tag_string_meta", "tags_meta", "meta_tags"))
+        ),
     }

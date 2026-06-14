@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import warnings
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
@@ -16,6 +17,8 @@ from .metadata import (
 )
 from .models import IMAGE_EXTENSIONS, ImageRecord
 
+ProgressCallback = Callable[[int, int, str], None]
+
 
 def iter_image_paths(root: Path, *, recursive: bool = True) -> Iterable[Path]:
     pattern = "**/*" if recursive else "*"
@@ -27,6 +30,29 @@ def iter_image_paths(root: Path, *, recursive: bool = True) -> Iterable[Path]:
 def find_sidecar(stem: str, folder: Path, suffix: str) -> Path | None:
     candidate = folder / f"{stem}{suffix}"
     return candidate if candidate.exists() else None
+
+
+def find_linked_sidecar(
+    image_path: Path,
+    image_root: Path,
+    sidecar_root: Path,
+    suffix: str,
+) -> Path | None:
+    folders: list[Path] = []
+    if sidecar_root == image_root:
+        folders.append(image_path.parent)
+    else:
+        try:
+            relative_parent = image_path.parent.relative_to(image_root)
+        except ValueError:
+            relative_parent = Path()
+        folders.extend((sidecar_root / relative_parent, sidecar_root, image_path.parent))
+
+    for folder in dict.fromkeys(folders):
+        sidecar = find_sidecar(image_path.stem, folder, suffix)
+        if sidecar is not None:
+            return sidecar
+    return None
 
 
 def resolve_scan_roots(input_dir: Path) -> tuple[Path, Path, Path]:
@@ -43,16 +69,23 @@ def resolve_scan_roots(input_dir: Path) -> tuple[Path, Path, Path]:
 
 def read_image_size(path: Path) -> tuple[int | None, int | None]:
     try:
-        with Image.open(path) as image:
-            return image.size
-    except (UnidentifiedImageError, OSError):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(path) as image:
+                return image.size
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         return None, None
 
 
-def build_record(image_path: Path, caption_root: Path, metadata_root: Path) -> ImageRecord:
+def build_record(
+    image_path: Path,
+    image_root: Path,
+    caption_root: Path,
+    metadata_root: Path,
+) -> ImageRecord:
     stem = image_path.stem
-    caption_path = find_sidecar(stem, caption_root, ".txt")
-    metadata_path = find_sidecar(stem, metadata_root, ".json")
+    caption_path = find_linked_sidecar(image_path, image_root, caption_root, ".txt")
+    metadata_path = find_linked_sidecar(image_path, image_root, metadata_root, ".json")
     width, height = read_image_size(image_path)
     raw_metadata = load_metadata(metadata_path)
     tags = extract_tag_categories(raw_metadata)
@@ -80,7 +113,12 @@ def build_record(image_path: Path, caption_root: Path, metadata_root: Path) -> I
     )
 
 
-def scan_dataset(input_dir: Path | str, *, recursive: bool = True) -> list[ImageRecord]:
+def scan_dataset(
+    input_dir: Path | str,
+    *,
+    recursive: bool = True,
+    progress_callback: ProgressCallback | None = None,
+) -> list[ImageRecord]:
     root = Path(input_dir).expanduser().resolve()
     if not root.exists():
         raise FileNotFoundError(f"Input directory does not exist: {root}")
@@ -88,7 +126,14 @@ def scan_dataset(input_dir: Path | str, *, recursive: bool = True) -> list[Image
         raise NotADirectoryError(f"Input path is not a directory: {root}")
 
     image_root, caption_root, metadata_root = resolve_scan_roots(root)
-    return [
-        build_record(image_path, caption_root, metadata_root)
-        for image_path in iter_image_paths(image_root, recursive=recursive)
-    ]
+    image_paths = list(iter_image_paths(image_root, recursive=recursive))
+    total = len(image_paths)
+    if progress_callback is not None:
+        progress_callback(0, total, "이미지 파일 목록을 준비했습니다.")
+
+    records: list[ImageRecord] = []
+    for index, image_path in enumerate(image_paths, start=1):
+        records.append(build_record(image_path, image_root, caption_root, metadata_root))
+        if progress_callback is not None:
+            progress_callback(index, total, f"스캔 중: {image_path.name}")
+    return records

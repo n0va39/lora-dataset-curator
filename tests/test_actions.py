@@ -24,7 +24,9 @@ def test_build_action_plan_moves_linked_files(tmp_path):
 
     assert plan.dry_run is True
     assert len(plan.moves) == 3
-    assert plan.moves[0].target == (tmp_path / "output" / "duplicate_quarantine" / "1.jpg").resolve()
+    assert plan.moves[0].target == (
+        tmp_path / "output" / "duplicate_quarantine" / "1.jpg"
+    ).resolve()
 
 
 def test_execute_plan_dry_run_does_not_move_files(tmp_path):

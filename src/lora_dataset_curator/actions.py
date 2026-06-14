@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import ActionName, ActionPlan, FileMove, ImageRecord
@@ -19,8 +19,8 @@ def build_action_plan(
 ) -> ActionPlan:
     """Build a safe plan for moving linked image/caption/metadata files.
 
-    `delete` is intentionally mapped to a quarantine-like target. Permanent deletion is not performed
-    by this helper.
+    `delete` is intentionally mapped to a quarantine-like target. Permanent deletion is not
+    performed by this helper.
     """
 
     output = Path(output_root).expanduser().resolve()
@@ -37,7 +37,9 @@ def build_action_plan(
         return ActionPlan(action=action, moves=(), dry_run=dry_run, reason=reason)
 
     target_dir = output / target_bucket
-    moves = tuple(FileMove(source=path, target=target_dir / path.name) for path in record.linked_paths)
+    moves = tuple(
+        FileMove(source=path, target=target_dir / path.name) for path in record.linked_paths
+    )
     return ActionPlan(action=action, moves=moves, dry_run=dry_run, reason=reason)
 
 
@@ -77,7 +79,7 @@ def append_action_log(log_path: Path | str, record: ImageRecord, plan: ActionPla
             writer.writeheader()
         writer.writerow(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "image_path": str(record.image_path),
                 "action": plan.action,
                 "target_paths": "|".join(str(move.target) for move in plan.moves),

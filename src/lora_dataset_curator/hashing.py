@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 
 
@@ -29,12 +30,14 @@ def compute_perceptual_hashes(path: Path | str) -> dict[str, str]:
     except ImportError as exc:
         raise RuntimeError("Install the image extra to use perceptual hashing") from exc
 
-    with Image.open(path) as image:
-        return {
-            "phash": str(imagehash.phash(image)),
-            "dhash": str(imagehash.dhash(image)),
-            "whash": str(imagehash.whash(image)),
-        }
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        with Image.open(path) as image:
+            return {
+                "phash": str(imagehash.phash(image)),
+                "dhash": str(imagehash.dhash(image)),
+                "whash": str(imagehash.whash(image)),
+            }
 
 
 def hash_distance(hash_a: str, hash_b: str) -> int:

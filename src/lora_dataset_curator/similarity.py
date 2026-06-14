@@ -47,6 +47,10 @@ def build_hash_pair(
         image_b=record_b.image_path,
         sha256_match=bool(record_a.sha256 and record_a.sha256 == record_b.sha256),
         md5_match=bool(record_a.source_md5 and record_a.source_md5 == record_b.source_md5),
+        post_id_match=bool(record_a.post_id and record_a.post_id == record_b.post_id),
+        source_url_match=bool(
+            record_a.source_url and record_a.source_url == record_b.source_url
+        ),
         phash_distance=phash_distance,
         dhash_distance=dhash_distance,
         tag_similarity=combined_tag_similarity(record_a, record_b),
@@ -60,6 +64,8 @@ def is_duplicate_candidate(
     dhash_threshold: int = 6,
 ) -> bool:
     if pair.sha256_match or pair.md5_match:
+        return True
+    if pair.post_id_match or pair.source_url_match:
         return True
     if pair.phash_distance is not None and pair.phash_distance <= phash_threshold:
         return True
