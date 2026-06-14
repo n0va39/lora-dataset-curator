@@ -394,7 +394,7 @@ def test_prepare_cache_button_creates_hash_cache(tmp_path):
     window.close()
 
 
-def test_floating_preview_drag_sets_crop_rect(tmp_path):
+def test_floating_preview_drag_handles_adjust_crop_rect(tmp_path):
     image_path = tmp_path / "a.png"
     Image.new("RGB", (100, 80), color="red").save(image_path)
 
@@ -409,18 +409,19 @@ def test_floating_preview_drag_sets_crop_rect(tmp_path):
     app.processEvents()
 
     image_x, image_y, image_width, image_height = preview.preview.image_display_rect()
-    start = QtCore.QPoint(
+    top_left = QtCore.QPoint(image_x, image_y)
+    top_left_target = QtCore.QPoint(
         image_x + int(image_width * 0.2),
         image_y + int(image_height * 0.25),
     )
-    end = QtCore.QPoint(
-        image_x + int(image_width * 0.8),
-        image_y + int(image_height * 0.75),
-    )
 
-    QtTest.QTest.mousePress(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=start)
-    QtTest.QTest.mouseMove(preview.preview, end)
-    QtTest.QTest.mouseRelease(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=end)
+    QtTest.QTest.mousePress(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=top_left)
+    QtTest.QTest.mouseMove(preview.preview, top_left_target)
+    QtTest.QTest.mouseRelease(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=top_left_target,
+    )
     app.processEvents()
 
     crop_rect = window.crop_rects[str(image_path)]
@@ -429,6 +430,24 @@ def test_floating_preview_drag_sets_crop_rect(tmp_path):
     assert crop_rect[1] > 0
     assert crop_rect[2] < 100
     assert crop_rect[3] < 80
+
+    right_edge = QtCore.QPoint(image_x + image_width, image_y + image_height // 2)
+    right_edge_target = QtCore.QPoint(
+        image_x + int(image_width * 0.75),
+        image_y + image_height // 2,
+    )
+    QtTest.QTest.mousePress(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=right_edge)
+    QtTest.QTest.mouseMove(preview.preview, right_edge_target)
+    QtTest.QTest.mouseRelease(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=right_edge_target,
+    )
+    app.processEvents()
+
+    crop_rect = window.crop_rects[str(image_path)]
+
+    assert window.crop_right.value() > 0
     assert preview.preview.crop_rect == crop_rect
     assert window.preview_label.crop_rect == crop_rect
     assert window.crop_enabled_checkbox.isChecked()
@@ -436,6 +455,21 @@ def test_floating_preview_drag_sets_crop_rect(tmp_path):
     assert window.crop_top.value() == crop_rect[1]
     assert window.crop_right.value() == 100 - crop_rect[0] - crop_rect[2]
     assert window.crop_bottom.value() == 80 - crop_rect[1] - crop_rect[3]
+
+    window.close()
+
+
+def test_full_size_crop_is_not_saved(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.crop_enabled_checkbox.setChecked(True)
+
+    assert app is not None
+    assert str(image_path) not in window.crop_rects
+    assert window.crop_enabled_checkbox.isChecked()
 
     window.close()
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PIL import Image
 
+from lora_dataset_curator import actions as actions_module
 from lora_dataset_curator.actions import build_action_plan, execute_plan
 from lora_dataset_curator.models import ImageRecord
 
@@ -66,3 +67,22 @@ def test_execute_plan_crops_moved_image_and_moves_sidecar(tmp_path):
     assert target_caption.read_text(encoding="utf-8") == "caption"
     with Image.open(target_image) as image:
         assert image.size == (4, 5)
+
+
+def test_execute_plan_skips_crop_when_rect_is_full_image(tmp_path, monkeypatch):
+    image_path = tmp_path / "1.png"
+    Image.new("RGB", (10, 8), color="red").save(image_path)
+    record = ImageRecord(image_path=image_path, stem="1", extension=".png")
+    plan = build_action_plan(record, tmp_path / "output", "move", dry_run=False)
+
+    def fail_crop(*args, **kwargs):
+        raise AssertionError("full-image crop should not be executed")
+
+    monkeypatch.setattr(actions_module, "apply_crop_to_image", fail_crop)
+
+    execute_plan(plan, crop_rect=(0, 0, 10, 8))
+
+    target_image = tmp_path / "output" / "selected" / "1.png"
+    assert not image_path.exists()
+    with Image.open(target_image) as image:
+        assert image.size == (10, 8)

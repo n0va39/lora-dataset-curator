@@ -61,14 +61,21 @@ def execute_plan(
     moves = list(plan.moves)
     if crop_rect is not None and moves and plan.action in {"keep", "move"}:
         image_move = moves[0]
-        apply_crop_to_image(image_move.source, image_move.target, crop_rect)
-        image_move.source.unlink()
-        moves = moves[1:]
+        if should_crop_image(image_move.source, crop_rect):
+            apply_crop_to_image(image_move.source, image_move.target, crop_rect)
+            image_move.source.unlink()
+            moves = moves[1:]
 
     for move in moves:
         move.target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(move.source), str(move.target))
     return list(plan.moves)
+
+
+def should_crop_image(source: Path, crop_rect: tuple[int, int, int, int]) -> bool:
+    x, y, width, height = crop_rect
+    with Image.open(source) as image:
+        return not (x <= 0 and y <= 0 and width >= image.width and height >= image.height)
 
 
 def apply_crop_to_image(

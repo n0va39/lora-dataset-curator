@@ -105,7 +105,8 @@ class ImagePreview(QWidget):
         self.pixmap = QPixmap()
         self.crop_rect: tuple[int, int, int, int] | None = None
         self.crop_edit_enabled = False
-        self.crop_drag_start: tuple[int, int] | None = None
+        self.crop_drag_handle: tuple[str, ...] | None = None
+        self.crop_drag_rect: tuple[int, int, int, int] | None = None
         self.crop_changed_callback: Callable[[tuple[int, int, int, int]], None] | None = None
         self.message = "선택된 이미지 없음"
         self.setMinimumSize(minimum_width, minimum_height)
@@ -129,7 +130,7 @@ class ImagePreview(QWidget):
 
     def set_crop_edit_enabled(self, enabled: bool) -> None:
         self.crop_edit_enabled = enabled
-        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def set_crop_changed_callback(
         self,
@@ -140,7 +141,8 @@ class ImagePreview(QWidget):
     def clear(self) -> None:
         self.pixmap = QPixmap()
         self.crop_rect = None
-        self.crop_drag_start = None
+        self.crop_drag_handle = None
+        self.crop_drag_rect = None
         self.message = "선택된 이미지 없음"
         self.update()
 
@@ -166,7 +168,7 @@ class ImagePreview(QWidget):
         )
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawPixmap(x, y, scaled)
-        if self.crop_rect is not None:
+        if self.effective_crop_rect() is not None:
             self.draw_crop_overlay(painter, x, y, scaled_width, scaled_height)
 
     def image_display_rect(self) -> tuple[int, int, int, int]:
@@ -180,6 +182,15 @@ class ImagePreview(QWidget):
         y = content_rect.y() + (content_rect.height() - scaled_size.height()) // 2
         return (x, y, scaled_size.width(), scaled_size.height())
 
+    def effective_crop_rect(self) -> tuple[int, int, int, int] | None:
+        if self.pixmap.isNull():
+            return None
+        if self.crop_rect is not None:
+            return self.crop_rect
+        if self.crop_edit_enabled:
+            return (0, 0, self.pixmap.width(), self.pixmap.height())
+        return None
+
     def draw_crop_overlay(
         self,
         painter: QPainter,
@@ -188,9 +199,10 @@ class ImagePreview(QWidget):
         image_width: int,
         image_height: int,
     ) -> None:
-        if self.pixmap.isNull() or self.crop_rect is None:
+        crop_rect = self.effective_crop_rect()
+        if self.pixmap.isNull() or crop_rect is None:
             return
-        crop_x, crop_y, crop_width, crop_height = self.crop_rect
+        crop_x, crop_y, crop_width, crop_height = crop_rect
         scale_x = image_width / self.pixmap.width()
         scale_y = image_height / self.pixmap.height()
         rect_x = image_x + int(crop_x * scale_x)
@@ -218,7 +230,38 @@ class ImagePreview(QWidget):
         )
         painter.setPen(QPen(QColor("#22c55e"), 3))
         painter.drawRect(rect_x, rect_y, rect_width, rect_height)
+        if self.crop_edit_enabled:
+            self.draw_crop_handles(painter, rect_x, rect_y, rect_width, rect_height)
         painter.restore()
+
+    def draw_crop_handles(
+        self,
+        painter: QPainter,
+        rect_x: int,
+        rect_y: int,
+        rect_width: int,
+        rect_height: int,
+    ) -> None:
+        handle_size = 10
+        points = (
+            (rect_x, rect_y),
+            (rect_x + rect_width // 2, rect_y),
+            (rect_x + rect_width, rect_y),
+            (rect_x, rect_y + rect_height // 2),
+            (rect_x + rect_width, rect_y + rect_height // 2),
+            (rect_x, rect_y + rect_height),
+            (rect_x + rect_width // 2, rect_y + rect_height),
+            (rect_x + rect_width, rect_y + rect_height),
+        )
+        painter.setPen(QPen(QColor("#16a34a"), 2))
+        painter.setBrush(QColor("#ffffff"))
+        for x, y in points:
+            painter.drawRect(
+                x - handle_size // 2,
+                y - handle_size // 2,
+                handle_size,
+                handle_size,
+            )
 
     def map_widget_to_image(self, point) -> tuple[int, int] | None:
         if self.pixmap.isNull():
@@ -235,18 +278,89 @@ class ImagePreview(QWidget):
             max(0, min(int((y - image_y) * scale_y), self.pixmap.height() - 1)),
         )
 
-    def update_drag_crop(self, point) -> None:
-        if self.crop_drag_start is None:
+    def display_crop_rect(self) -> tuple[int, int, int, int] | None:
+        crop_rect = self.effective_crop_rect()
+        if self.pixmap.isNull() or crop_rect is None:
+            return None
+        image_x, image_y, image_width, image_height = self.image_display_rect()
+        if image_width <= 0 or image_height <= 0:
+            return None
+        crop_x, crop_y, crop_width, crop_height = crop_rect
+        scale_x = image_width / self.pixmap.width()
+        scale_y = image_height / self.pixmap.height()
+        return (
+            image_x + int(crop_x * scale_x),
+            image_y + int(crop_y * scale_y),
+            max(1, int(crop_width * scale_x)),
+            max(1, int(crop_height * scale_y)),
+        )
+
+    def crop_handle_at(self, point) -> tuple[str, ...] | None:
+        display_rect = self.display_crop_rect()
+        if display_rect is None:
+            return None
+        rect_x, rect_y, rect_width, rect_height = display_rect
+        x = point.x()
+        y = point.y()
+        right = rect_x + rect_width
+        bottom = rect_y + rect_height
+        threshold = 14
+        near_left = abs(x - rect_x) <= threshold and rect_y - threshold <= y <= bottom + threshold
+        near_right = abs(x - right) <= threshold and rect_y - threshold <= y <= bottom + threshold
+        near_top = abs(y - rect_y) <= threshold and rect_x - threshold <= x <= right + threshold
+        near_bottom = abs(y - bottom) <= threshold and rect_x - threshold <= x <= right + threshold
+
+        if near_left and near_top:
+            return ("left", "top")
+        if near_right and near_top:
+            return ("right", "top")
+        if near_left and near_bottom:
+            return ("left", "bottom")
+        if near_right and near_bottom:
+            return ("right", "bottom")
+        if near_left:
+            return ("left",)
+        if near_right:
+            return ("right",)
+        if near_top:
+            return ("top",)
+        if near_bottom:
+            return ("bottom",)
+        return None
+
+    def cursor_for_handle(self, handle: tuple[str, ...] | None) -> Qt.CursorShape:
+        if handle in {("left", "top"), ("right", "bottom")}:
+            return Qt.CursorShape.SizeFDiagCursor
+        if handle in {("right", "top"), ("left", "bottom")}:
+            return Qt.CursorShape.SizeBDiagCursor
+        if handle in {("left",), ("right",)}:
+            return Qt.CursorShape.SizeHorCursor
+        if handle in {("top",), ("bottom",)}:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def update_handle_drag(self, point) -> None:
+        if self.crop_drag_handle is None or self.crop_drag_rect is None:
             return
         mapped = self.map_widget_to_image(point)
         if mapped is None:
             return
-        start_x, start_y = self.crop_drag_start
-        end_x, end_y = mapped
-        left = min(start_x, end_x)
-        top = min(start_y, end_y)
-        right = max(start_x, end_x)
-        bottom = max(start_y, end_y)
+        image_width = self.pixmap.width()
+        image_height = self.pixmap.height()
+        x, y, width, height = self.crop_drag_rect
+        left = x
+        top = y
+        right = x + width - 1
+        bottom = y + height - 1
+        pointer_x, pointer_y = mapped
+        if "left" in self.crop_drag_handle:
+            left = max(0, min(pointer_x, right))
+        if "right" in self.crop_drag_handle:
+            right = min(image_width - 1, max(pointer_x, left))
+        if "top" in self.crop_drag_handle:
+            top = max(0, min(pointer_y, bottom))
+        if "bottom" in self.crop_drag_handle:
+            bottom = min(image_height - 1, max(pointer_y, top))
         crop_rect = (left, top, max(1, right - left + 1), max(1, bottom - top + 1))
         self.set_crop_rect(crop_rect)
         if self.crop_changed_callback is not None:
@@ -254,23 +368,28 @@ class ImagePreview(QWidget):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self.crop_edit_enabled and event.button() == Qt.MouseButton.LeftButton:
-            mapped = self.map_widget_to_image(event.position().toPoint())
-            if mapped is not None:
-                self.crop_drag_start = mapped
-                self.update_drag_crop(event.position().toPoint())
+            handle = self.crop_handle_at(event.position().toPoint())
+            if handle is not None and self.effective_crop_rect() is not None:
+                self.crop_drag_handle = handle
+                self.crop_drag_rect = self.effective_crop_rect()
+                self.setCursor(self.cursor_for_handle(handle))
                 return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        if self.crop_edit_enabled and self.crop_drag_start is not None:
-            self.update_drag_crop(event.position().toPoint())
+        if self.crop_edit_enabled and self.crop_drag_handle is not None:
+            self.update_handle_drag(event.position().toPoint())
             return
+        if self.crop_edit_enabled:
+            self.setCursor(self.cursor_for_handle(self.crop_handle_at(event.position().toPoint())))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self.crop_edit_enabled and event.button() == Qt.MouseButton.LeftButton:
-            self.update_drag_crop(event.position().toPoint())
-            self.crop_drag_start = None
+            self.update_handle_drag(event.position().toPoint())
+            self.crop_drag_handle = None
+            self.crop_drag_rect = None
+            self.setCursor(self.cursor_for_handle(self.crop_handle_at(event.position().toPoint())))
             return
         super().mouseReleaseEvent(event)
 
@@ -1162,6 +1281,13 @@ class MainWindow(QMainWindow):
         bottom = max(0, min(bottom, height - top - 1))
         return (left, top, width - left - right, height - top - bottom)
 
+    @staticmethod
+    def is_full_crop_rect(record: ImageRecord, crop_rect: tuple[int, int, int, int]) -> bool:
+        x, y, crop_width, crop_height = MainWindow.clamp_crop_rect(record, crop_rect)
+        return x == 0 and y == 0 and crop_width == (record.width or 1) and crop_height == (
+            record.height or 1
+        )
+
     def on_crop_controls_changed(self) -> None:
         if self.syncing_crop_controls or self.current_record is None:
             return
@@ -1182,6 +1308,13 @@ class MainWindow(QMainWindow):
             self.crop_right.value(),
             self.crop_bottom.value(),
         )
+        if self.is_full_crop_rect(self.current_record, crop_rect):
+            self.crop_rects.pop(key, None)
+            self.save_crop_rects()
+            self.preview_label.set_crop_rect(None)
+            if self.floating_preview is not None and self.floating_preview.isVisible():
+                self.floating_preview.preview.set_crop_rect(None)
+            return
         self.set_current_crop_rect(crop_rect)
 
     def set_center_square_crop(self) -> None:
@@ -1211,6 +1344,9 @@ class MainWindow(QMainWindow):
         if self.current_record is None:
             return
         crop_rect = self.clamp_crop_rect(self.current_record, crop_rect)
+        if self.is_full_crop_rect(self.current_record, crop_rect):
+            self.clear_current_crop()
+            return
         self.crop_rects[str(self.current_record.image_path)] = crop_rect
         self.save_crop_rects()
         self.preview_label.set_crop_rect(crop_rect)
