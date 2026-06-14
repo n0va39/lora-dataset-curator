@@ -1,85 +1,70 @@
 # LoRA Dataset Curator
 
-LoRA 학습용 이미지·캡션 데이터셋을 검수하고 정리하기 위한 로컬 GUI 프로그램입니다.
+LoRA 학습용 이미지, caption, metadata 데이터셋을 로컬에서 검수하고 정리하는 Windows GUI 도구입니다.
 
-이 프로젝트는 이미지와 캡션을 직접 다운로드하지 않습니다. 이미 다운로드된 이미지, caption, metadata를 불러와서 중복·유사 이미지 후보를 묶고, 사람이 keep/move/delete/quarantine을 빠르게 판단할 수 있게 하는 큐레이션 도구입니다.
+이미지 다운로드나 Danbooru/Gelbooru API 호출은 포함하지 않습니다. 이미 준비된 이미지 폴더를 스캔하고, 유사 이미지 그룹을 확인한 뒤 사람이 이동/삭제 예정/보류 결정을 내리는 큐레이션 프로그램입니다.
 
-## 목표
+## 주요 기능
 
-- 이미지와 연결된 `.txt`, `.json` 메타데이터를 함께 관리
-- Danbooru post id, md5, source, tag 정보를 검수에 활용
-- 거의 동일하거나 유사한 이미지를 그룹화
-- 그룹 안에서 보존 우선순위가 높은 이미지를 먼저 표시
-- 최종 판단은 사람이 수행
-- 선택한 출력 디렉토리로 이미지와 캡션을 함께 이동하거나 격리
+- 이미지와 같은 stem의 `.txt`, `.json` sidecar 연결
+- `images/`, `captions/`, `metadata/` 분리 구조 스캔
+- SHA256, MD5, pHash, dHash 기반 중복/유사 이미지 그룹 분석
+- 그룹별 추천 keep 이미지 점수 표시
+- 이미지 미리보기, 큰 미리보기, 방향키 이동
+- `A` 이동 결정, `D` 삭제 예정, `S` 보류 단축키
+- 이미지별 crop 설정 및 일괄 비율 crop 설정
+- 결정 상태와 crop 설정 자동 저장
+- 해시/중복 분석 캐시 저장
+- 앱 data 휴지통 기반 삭제 예정 파일 보관, 복구, 비우기
+- Windows `.exe` 배포 빌드
 
-## 실행
+## 빠른 실행
 
-개발 환경을 준비합니다.
+개발 환경:
 
 ```powershell
 uv sync --extra gui --extra image --extra build --extra dev
-```
-
-CLI로 데이터셋을 스캔합니다.
-
-```powershell
-uv run lora-dataset-curator scan sample/000_raw
-```
-
-중복/유사 그룹 후보를 분석합니다.
-
-```powershell
-uv run lora-dataset-curator duplicates sample/000_raw
-```
-
-pHash/dHash 기반 유사 이미지 후보까지 보려면 아래처럼 실행합니다. 큰 데이터셋에서는 시간이 걸릴 수 있습니다.
-
-```powershell
-uv run lora-dataset-curator duplicates sample/000_raw --perceptual
-```
-
-GUI를 실행합니다.
-
-```powershell
-uv run lora-dataset-curator gui sample/000_raw
-```
-
-인자 없이 실행해도 GUI가 열립니다.
-
-```powershell
 uv run lora-dataset-curator
 ```
 
-현재 GUI의 action 버튼은 dry-run 이동 계획만 표시합니다. 실제 파일 이동이나 삭제는 수행하지 않습니다.
-GUI의 `Duplicate Groups` 탭에서 `Analyze`를 누르면 SHA256/metadata 기준 그룹을 볼 수 있습니다.
-`Use pHash/dHash`를 켜면 perceptual hash 기반 유사 후보도 함께 계산합니다.
-
-## GUI 기본 사용 방법
-
-1. `입력 폴더`에 검수할 데이터셋 폴더를 지정합니다.
-2. `출력 폴더`에 keep/quarantine 계획을 만들 기준 폴더를 지정합니다.
-3. `스캔`을 누르면 이미지, caption, metadata 연결 상태를 읽습니다.
-4. 왼쪽 목록에서 이미지를 선택하면 오른쪽에서 미리보기, 캡션, 메타데이터를 확인합니다.
-5. `보관`, `이동`, `격리`, `건너뛰기` 버튼은 실제 파일을 옮기지 않고 dry-run 이동 계획만 보여줍니다.
-6. `중복 그룹` 탭에서 `분석`을 누르면 중복 후보 그룹을 계산합니다.
-7. `pHash/dHash 사용`을 켜면 리사이즈나 압축 차이가 있는 유사 이미지 후보도 찾습니다. 이미지가 많으면 시간이 오래 걸릴 수 있습니다.
-
-스캔과 중복 분석 중에는 하단 진행률이 갱신됩니다. 작업은 백그라운드에서 실행되어 창이 멈춘 것처럼 보이는 현상을 줄입니다.
-
-Windows 실행 파일을 빌드합니다.
+Windows exe 빌드:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
-빌드된 exe는 더블클릭하거나 인자 없이 실행하면 GUI가 열립니다.
+릴리즈 zip 생성:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1
+```
+
+빌드 결과:
+
+```text
+dist/
+  LoRA-Dataset-Curator.exe
+  LoRA-Dataset-Curator-0.1.0.zip
+```
+
+## 기본 사용 흐름
+
+1. `입력 폴더`에 검수할 데이터셋 폴더를 지정한다.
+2. `출력 폴더`에 이동 결정 파일을 저장할 폴더를 지정한다.
+3. `스캔`을 눌러 이미지, caption, metadata 연결 상태를 확인한다.
+4. `중복 그룹` 탭에서 `분석`을 눌러 유사 이미지 그룹을 만든다.
+5. 큰 미리보기 또는 표에서 이미지를 확인한다.
+6. `A`, `D`, `S` 또는 버튼으로 결정을 지정한다.
+7. 필요한 경우 crop 설정을 지정한다.
+8. `실행`을 눌러 결정된 작업을 수행한다.
+
+이동 결정 파일은 출력 폴더 바로 아래에 저장됩니다. 삭제 예정 파일은 영구 삭제하지 않고 앱 data 휴지통으로 이동합니다.
 
 ## 저장 위치
 
-배포 exe 실행 시 앱 데이터는 기본적으로 exe 옆 `data/` 폴더에 저장됩니다. 해당 위치에 쓸 수 없으면 Windows의 `%LOCALAPPDATA%\lora-dataset-curator`를 사용합니다. 개발 또는 테스트에서는 `LORA_DATASET_CURATOR_HOME` 환경변수로 저장 위치를 지정할 수 있습니다.
+exe 배포 실행 시 앱 데이터는 기본적으로 exe 옆 `data/` 폴더에 저장됩니다. 해당 위치에 쓸 수 없으면 Windows의 `%LOCALAPPDATA%\lora-dataset-curator`를 사용합니다.
 
-저장 구조는 아래와 같습니다.
+개발 또는 테스트에서는 `LORA_DATASET_CURATOR_HOME` 환경변수로 저장 위치를 지정할 수 있습니다.
 
 ```text
 data/
@@ -95,29 +80,35 @@ data/
   state/
     decisions/
       <output-id>.json
+    crops/
+      <output-id>.json
+  trash/
+    <trash-item>/
+      manifest.json
+      image/caption/metadata files
   logs/
 ```
 
-현재 경로는 CLI에서 확인할 수 있습니다.
+현재 저장 경로는 CLI에서 확인할 수 있습니다.
 
 ```powershell
 uv run lora-dataset-curator paths
 ```
 
-해시 캐시는 데이터셋 폴더 안에 개별 파일로 만들지 않고 `cache/hashes.sqlite` 하나에 저장합니다. 이미지 경로가 바뀌어도 같은 파일 내용이면 SHA256 기준으로 pHash/dHash를 재사용할 수 있습니다.
+## 문서
 
-## 관련 프로젝트
-
-이미지와 태그 다운로드는 별도 도구에서 수행합니다.
-
-- <https://github.com/n0va39/danbooru-downloader>
-
-## 개발 문서
-
-상세한 구현 계획과 Codex 작업 지침은 아래 문서에 정리합니다.
-
-- [Project Plan](docs/PROJECT_PLAN.md)
+- [User Guide](docs/USER_GUIDE.md)
+- [Release Notes](RELEASE.md)
 - [Build and Distribution](docs/BUILD_DISTRIBUTION.md)
+- [Project Plan](docs/PROJECT_PLAN.md)
+
+## 주의 사항
+
+- 다운로드 기능은 제공하지 않습니다.
+- API 호출 기능은 제공하지 않습니다.
+- 삭제 예정 파일은 앱 휴지통으로 이동됩니다.
+- `파일 > 휴지통 비우기`는 확인 후 휴지통 파일을 영구 삭제합니다.
+- 실행 전 수동으로 파일을 옮긴 경우 해당 파일은 건너뜁니다.
 
 ## License
 
