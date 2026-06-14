@@ -10,6 +10,7 @@ from typing import Any
 
 from .models import DuplicateGroup, ImageRecord, SimilarityPair
 from .storage import (
+    crop_settings_file_path,
     decisions_file_path,
     duplicate_groups_file_path,
     hash_cache_file_path,
@@ -20,6 +21,10 @@ HASH_CACHE_VERSION = 1
 
 def decisions_path(output_root: Path | str) -> Path:
     return decisions_file_path(output_root)
+
+
+def crop_settings_path(output_root: Path | str) -> Path:
+    return crop_settings_file_path(output_root)
 
 
 def duplicate_groups_path(input_root: Path | str) -> Path:
@@ -265,6 +270,47 @@ def load_decisions(output_root: Path | str) -> dict[str, str]:
 
 def save_decisions(output_root: Path | str, decisions: dict[str, str]) -> None:
     write_json(decisions_path(output_root), {"version": 1, "decisions": decisions})
+
+
+def load_crop_settings(output_root: Path | str) -> dict[str, tuple[int, int, int, int]]:
+    path = crop_settings_path(output_root)
+    if not path.exists():
+        return {}
+    data = read_json(path)
+    if not isinstance(data, dict):
+        return {}
+    crops = data.get("crops", {})
+    if not isinstance(crops, dict):
+        return {}
+
+    loaded: dict[str, tuple[int, int, int, int]] = {}
+    for image_path, rect in crops.items():
+        if not isinstance(rect, (list, tuple)) or len(rect) != 4:
+            continue
+        try:
+            x, y, width, height = (int(value) for value in rect)
+        except (TypeError, ValueError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        loaded[str(image_path)] = (x, y, width, height)
+    return loaded
+
+
+def save_crop_settings(
+    output_root: Path | str,
+    crop_rects: dict[str, tuple[int, int, int, int]],
+) -> None:
+    write_json(
+        crop_settings_path(output_root),
+        {
+            "version": 1,
+            "crops": {
+                image_path: [x, y, width, height]
+                for image_path, (x, y, width, height) in crop_rects.items()
+            },
+        },
+    )
 
 
 def save_duplicate_result(

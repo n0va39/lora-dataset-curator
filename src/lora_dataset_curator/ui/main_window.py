@@ -51,8 +51,10 @@ from PySide6.QtWidgets import (
 
 from lora_dataset_curator.actions import append_action_log, build_action_plan, execute_plan
 from lora_dataset_curator.cache import (
+    load_crop_settings,
     load_decisions,
     load_duplicate_result,
+    save_crop_settings,
     save_decisions,
     save_duplicate_result,
 )
@@ -101,6 +103,7 @@ class ImagePreview(QWidget):
     ) -> None:
         super().__init__()
         self.pixmap = QPixmap()
+        self.crop_rect: tuple[int, int, int, int] | None = None
         self.message = "선택된 이미지 없음"
         self.setMinimumSize(minimum_width, minimum_height)
         if maximum_height > 0:
@@ -117,8 +120,13 @@ class ImagePreview(QWidget):
             self.message = ""
         self.update()
 
+    def set_crop_rect(self, crop_rect: tuple[int, int, int, int] | None) -> None:
+        self.crop_rect = crop_rect
+        self.update()
+
     def clear(self) -> None:
         self.pixmap = QPixmap()
+        self.crop_rect = None
         self.message = "선택된 이미지 없음"
         self.update()
 
@@ -145,6 +153,36 @@ class ImagePreview(QWidget):
         y = content_rect.y() + (content_rect.height() - scaled.height()) // 2
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawPixmap(x, y, scaled)
+        if self.crop_rect is not None:
+            self.draw_crop_overlay(painter, x, y, scaled.width(), scaled.height())
+
+    def draw_crop_overlay(
+        self,
+        painter: QPainter,
+        image_x: int,
+        image_y: int,
+        image_width: int,
+        image_height: int,
+    ) -> None:
+        if self.pixmap.isNull() or self.crop_rect is None:
+            return
+        crop_x, crop_y, crop_width, crop_height = self.crop_rect
+        scale_x = image_width / self.pixmap.width()
+        scale_y = image_height / self.pixmap.height()
+        rect_x = image_x + int(crop_x * scale_x)
+        rect_y = image_y + int(crop_y * scale_y)
+        rect_width = max(1, int(crop_width * scale_x))
+        rect_height = max(1, int(crop_height * scale_y))
+
+        painter.save()
+        overlay = QColor(0, 0, 0, 90)
+        painter.fillRect(image_x, image_y, image_width, image_height, overlay)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(rect_x, rect_y, rect_width, rect_height, QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.setPen(QPen(QColor("#22c55e"), 3))
+        painter.drawRect(rect_x, rect_y, rect_width, rect_height)
+        painter.restore()
 
 
 class GroupImageTile(QWidget):
@@ -377,6 +415,7 @@ class FloatingPreviewWindow(QWidget):
             self.decision_value.setText("-")
             return
         self.preview.set_image(record.image_path)
+        self.preview.set_crop_rect(self.owner.crop_rects.get(str(record.image_path)))
         decision = self.owner.review_decisions.get(str(record.image_path), "")
         label = DECISION_LABELS.get(decision, "미결정")
         size = f"{record.width}x{record.height}" if record.width and record.height else "unknown"
@@ -434,6 +473,8 @@ class MainWindow(QMainWindow):
         self.scan_order: dict[Path, int] = {}
         self.record_group_ids: dict[Path, str] = {}
         self.review_decisions: dict[str, str] = {}
+        self.crop_rects: dict[str, tuple[int, int, int, int]] = {}
+        self.syncing_crop_controls = False
         self.current_record: ImageRecord | None = None
         self.duplicate_result: DuplicateAnalysisResult | None = None
         self.background_tasks = background_tasks
@@ -455,6 +496,7 @@ class MainWindow(QMainWindow):
         )
         self.input_path = QLineEdit(str(initial_input_dir) if initial_input_dir else "")
         self.output_path = QLineEdit(str(initial_output_dir))
+        self.crop_rects = load_crop_settings(self.output_root())
         self.summary_label = QLabel("아직 스캔하지 않았습니다.")
         self.status_label = QLabel("대기 중")
         self.progress_bar = QProgressBar()
@@ -483,6 +525,16 @@ class MainWindow(QMainWindow):
         self.metadata_text.setReadOnly(True)
         self.info_text = QPlainTextEdit()
         self.info_text.setReadOnly(True)
+        self.crop_enabled_checkbox = QCheckBox("자르기 적용")
+        self.crop_enabled_checkbox.toggled.connect(self.on_crop_controls_changed)
+        self.crop_x = self.create_crop_spinbox()
+        self.crop_y = self.create_crop_spinbox()
+        self.crop_width = self.create_crop_spinbox(minimum=1)
+        self.crop_height = self.create_crop_spinbox(minimum=1)
+        self.crop_square_button = QPushButton("중앙 정사각형")
+        self.crop_square_button.clicked.connect(self.set_center_square_crop)
+        self.crop_full_button = QPushButton("전체")
+        self.crop_full_button.clicked.connect(self.clear_current_crop)
         self.duplicate_summary_label = QLabel("아직 중복 분석을 실행하지 않았습니다.")
         self.use_perceptual_checkbox = QCheckBox("pHash/dHash 사용")
         duplicate_settings = self.profile.get("duplicates", {})
@@ -536,6 +588,12 @@ class MainWindow(QMainWindow):
         if not isinstance(value, str) or not value.strip():
             return None
         return Path(value).expanduser()
+
+    def create_crop_spinbox(self, *, minimum: int = 0) -> QSpinBox:
+        spinbox = QSpinBox()
+        spinbox.setRange(minimum, 999_999)
+        spinbox.valueChanged.connect(self.on_crop_controls_changed)
+        return spinbox
 
     def save_current_paths(self) -> None:
         updates: dict[str, str] = {}
@@ -614,6 +672,7 @@ class MainWindow(QMainWindow):
         preview_layout.setContentsMargins(12, 12, 12, 6)
         preview_layout.addWidget(self.preview_label, stretch=1)
         preview_layout.addLayout(self.build_action_buttons())
+        preview_layout.addWidget(self.build_crop_controls())
 
         caption_panel = QWidget()
         caption_layout = QVBoxLayout(caption_panel)
@@ -639,6 +698,23 @@ class MainWindow(QMainWindow):
         self.review_splitter.setStretchFactor(1, 2)
         self.review_splitter.setSizes([760, 520])
         return self.review_splitter
+
+    def build_crop_controls(self) -> QWidget:
+        panel = QGroupBox("자르기")
+        layout = QGridLayout(panel)
+        layout.addWidget(self.crop_enabled_checkbox, 0, 0)
+        layout.addWidget(QLabel("X"), 0, 1)
+        layout.addWidget(self.crop_x, 0, 2)
+        layout.addWidget(QLabel("Y"), 0, 3)
+        layout.addWidget(self.crop_y, 0, 4)
+        layout.addWidget(QLabel("W"), 1, 1)
+        layout.addWidget(self.crop_width, 1, 2)
+        layout.addWidget(QLabel("H"), 1, 3)
+        layout.addWidget(self.crop_height, 1, 4)
+        layout.addWidget(self.crop_square_button, 0, 5)
+        layout.addWidget(self.crop_full_button, 1, 5)
+        layout.setColumnStretch(6, 1)
+        return panel
 
     @staticmethod
     def build_collapsible_text_panel(title: str, text_widget: QPlainTextEdit) -> QGroupBox:
@@ -792,6 +868,8 @@ class MainWindow(QMainWindow):
         if path:
             self.output_path.setText(QDir.toNativeSeparators(path))
             self.save_current_paths()
+            self.crop_rects = load_crop_settings(self.output_root())
+            self.sync_crop_controls(self.current_record)
 
     def scan(self) -> None:
         input_dir = Path(self.input_path.text()).expanduser()
@@ -823,6 +901,7 @@ class MainWindow(QMainWindow):
         self.scan_order = {record.image_path: index for index, record in enumerate(records)}
         self.record_group_ids = {}
         self.review_decisions = load_decisions(self.output_root())
+        self.crop_rects = load_crop_settings(self.output_root())
 
         self.populate_table()
         self.clear_duplicate_groups()
@@ -880,6 +959,7 @@ class MainWindow(QMainWindow):
         )
         self.info_text.setPlainText(self.format_info(record))
         self.load_preview(record.image_path)
+        self.sync_crop_controls(record)
         if self.floating_preview is not None and self.floating_preview.isVisible():
             self.floating_preview.show_record(record)
 
@@ -890,9 +970,137 @@ class MainWindow(QMainWindow):
         self.caption_meta_label.clear()
         self.metadata_text.clear()
         self.info_text.clear()
+        self.sync_crop_controls(None)
 
     def load_preview(self, path: Path) -> None:
         self.preview_label.set_image(path)
+        crop_rect = (
+            self.crop_rects.get(str(self.current_record.image_path))
+            if self.current_record is not None
+            else None
+        )
+        self.preview_label.set_crop_rect(crop_rect)
+
+    def sync_crop_controls(self, record: ImageRecord | None) -> None:
+        self.syncing_crop_controls = True
+        try:
+            enabled = record is not None and record.width is not None and record.height is not None
+            for widget in (
+                self.crop_enabled_checkbox,
+                self.crop_x,
+                self.crop_y,
+                self.crop_width,
+                self.crop_height,
+                self.crop_square_button,
+                self.crop_full_button,
+            ):
+                widget.setEnabled(enabled)
+
+            if not enabled or record is None:
+                self.crop_enabled_checkbox.setChecked(False)
+                self.preview_label.set_crop_rect(None)
+                return
+
+            width = record.width or 1
+            height = record.height or 1
+            self.crop_x.setRange(0, max(0, width - 1))
+            self.crop_y.setRange(0, max(0, height - 1))
+            self.crop_width.setRange(1, width)
+            self.crop_height.setRange(1, height)
+
+            crop_rect = self.crop_rects.get(str(record.image_path))
+            if crop_rect is None:
+                self.crop_enabled_checkbox.setChecked(False)
+                self.crop_x.setValue(0)
+                self.crop_y.setValue(0)
+                self.crop_width.setValue(width)
+                self.crop_height.setValue(height)
+            else:
+                x, y, crop_width, crop_height = self.clamp_crop_rect(record, crop_rect)
+                self.crop_enabled_checkbox.setChecked(True)
+                self.crop_x.setValue(x)
+                self.crop_y.setValue(y)
+                self.crop_width.setValue(crop_width)
+                self.crop_height.setValue(crop_height)
+            self.preview_label.set_crop_rect(crop_rect)
+        finally:
+            self.syncing_crop_controls = False
+
+    @staticmethod
+    def clamp_crop_rect(
+        record: ImageRecord,
+        crop_rect: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int]:
+        width = record.width or 1
+        height = record.height or 1
+        x, y, crop_width, crop_height = crop_rect
+        x = max(0, min(x, width - 1))
+        y = max(0, min(y, height - 1))
+        crop_width = max(1, min(crop_width, width - x))
+        crop_height = max(1, min(crop_height, height - y))
+        return (x, y, crop_width, crop_height)
+
+    def on_crop_controls_changed(self) -> None:
+        if self.syncing_crop_controls or self.current_record is None:
+            return
+
+        key = str(self.current_record.image_path)
+        if not self.crop_enabled_checkbox.isChecked():
+            self.crop_rects.pop(key, None)
+            self.save_crop_rects()
+            self.preview_label.set_crop_rect(None)
+            if self.floating_preview is not None and self.floating_preview.isVisible():
+                self.floating_preview.show_record(self.current_record)
+            return
+
+        crop_rect = self.clamp_crop_rect(
+            self.current_record,
+            (
+                self.crop_x.value(),
+                self.crop_y.value(),
+                self.crop_width.value(),
+                self.crop_height.value(),
+            ),
+        )
+        self.crop_rects[key] = crop_rect
+        self.save_crop_rects()
+        self.preview_label.set_crop_rect(crop_rect)
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.show_record(self.current_record)
+
+    def set_center_square_crop(self) -> None:
+        if (
+            self.current_record is None
+            or not self.current_record.width
+            or not self.current_record.height
+        ):
+            return
+        side = min(self.current_record.width, self.current_record.height)
+        x = (self.current_record.width - side) // 2
+        y = (self.current_record.height - side) // 2
+        self.syncing_crop_controls = True
+        try:
+            self.crop_enabled_checkbox.setChecked(True)
+            self.crop_x.setValue(x)
+            self.crop_y.setValue(y)
+            self.crop_width.setValue(side)
+            self.crop_height.setValue(side)
+        finally:
+            self.syncing_crop_controls = False
+        self.on_crop_controls_changed()
+
+    def clear_current_crop(self) -> None:
+        if self.current_record is None:
+            return
+        self.syncing_crop_controls = True
+        try:
+            self.crop_enabled_checkbox.setChecked(False)
+        finally:
+            self.syncing_crop_controls = False
+        self.on_crop_controls_changed()
+
+    def save_crop_rects(self) -> None:
+        save_crop_settings(self.output_root(), self.crop_rects)
 
     def show_floating_preview(self) -> None:
         if self.floating_preview is None:
@@ -1045,7 +1253,12 @@ class MainWindow(QMainWindow):
             if action not in {"move", "delete"}:
                 continue
             plan = build_action_plan(record, self.output_root(), action, dry_run=False)
-            execute_plan(plan)
+            crop_rect = (
+                self.crop_rects.get(str(record.image_path))
+                if action == "move"
+                else None
+            )
+            execute_plan(plan, crop_rect=crop_rect)
             append_action_log(log_path, record, plan)
             moved_count += 1
 

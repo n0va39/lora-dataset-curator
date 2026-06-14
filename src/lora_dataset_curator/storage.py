@@ -185,5 +185,10 @@ def decisions_file_path(output_root: Path | str) -> Path:
     return paths.decisions_dir / f"{stable_path_key(output_root)}.json"
 
 
+def crop_settings_file_path(output_root: Path | str) -> Path:
+    paths = ensure_app_data_dirs()
+    return paths.state_dir / "crops" / f"{stable_path_key(output_root)}.json"
+
+
 def hash_cache_file_path() -> Path:
     return ensure_app_data_dirs().hash_cache_path

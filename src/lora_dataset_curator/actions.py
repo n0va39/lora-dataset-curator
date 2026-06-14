@@ -5,6 +5,8 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from PIL import Image, ImageOps
+
 from .models import ActionName, ActionPlan, FileMove, ImageRecord
 
 
@@ -43,7 +45,11 @@ def build_action_plan(
     return ActionPlan(action=action, moves=moves, dry_run=dry_run, reason=reason)
 
 
-def execute_plan(plan: ActionPlan) -> list[FileMove]:
+def execute_plan(
+    plan: ActionPlan,
+    *,
+    crop_rect: tuple[int, int, int, int] | None = None,
+) -> list[FileMove]:
     """Execute a plan unless it is a dry run.
 
     Returns the list of planned moves. This makes dry-run output easy to inspect in GUI or CLI.
@@ -52,10 +58,41 @@ def execute_plan(plan: ActionPlan) -> list[FileMove]:
     if plan.dry_run:
         return list(plan.moves)
 
-    for move in plan.moves:
+    moves = list(plan.moves)
+    if crop_rect is not None and moves and plan.action in {"keep", "move"}:
+        image_move = moves[0]
+        apply_crop_to_image(image_move.source, image_move.target, crop_rect)
+        image_move.source.unlink()
+        moves = moves[1:]
+
+    for move in moves:
         move.target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(move.source), str(move.target))
     return list(plan.moves)
+
+
+def apply_crop_to_image(
+    source: Path,
+    target: Path,
+    crop_rect: tuple[int, int, int, int],
+) -> None:
+    x, y, width, height = crop_rect
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid crop size: {crop_rect}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source) as opened:
+        original_format = opened.format
+        image = ImageOps.exif_transpose(opened)
+        left = max(0, min(x, image.width - 1))
+        top = max(0, min(y, image.height - 1))
+        right = max(left + 1, min(left + width, image.width))
+        bottom = max(top + 1, min(top + height, image.height))
+        cropped = image.crop((left, top, right, bottom))
+        if original_format:
+            cropped.save(target, format=original_format)
+        else:
+            cropped.save(target)
 
 
 def append_action_log(log_path: Path | str, record: ImageRecord, plan: ActionPlan) -> None:

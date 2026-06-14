@@ -168,6 +168,69 @@ def test_review_decisions_are_saved_and_loaded(tmp_path):
     next_window.close()
 
 
+def test_crop_settings_are_saved_loaded_and_previewed(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (20, 12), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.crop_enabled_checkbox.setChecked(True)
+    window.crop_x.setValue(2)
+    window.crop_y.setValue(3)
+    window.crop_width.setValue(10)
+    window.crop_height.setValue(6)
+    window.close()
+
+    next_window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+
+    assert app is not None
+    assert next_window.crop_rects[str(image_path)] == (2, 3, 10, 6)
+    assert next_window.preview_label.crop_rect == (2, 3, 10, 6)
+    assert next_window.crop_enabled_checkbox.isChecked()
+    assert next_window.crop_x.value() == 2
+    assert next_window.crop_y.value() == 3
+    assert next_window.crop_width.value() == 10
+    assert next_window.crop_height.value() == 6
+
+    next_window.close()
+
+
+def test_execute_review_decisions_applies_crop_to_moved_image(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    caption_path = tmp_path / "a.txt"
+    Image.new("RGB", (20, 12), color="red").save(image_path)
+    caption_path.write_text("caption", encoding="utf-8")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.crop_enabled_checkbox.setChecked(True)
+    window.crop_x.setValue(4)
+    window.crop_y.setValue(2)
+    window.crop_width.setValue(8)
+    window.crop_height.setValue(5)
+    window.set_current_decision("move")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
+
+    window.execute_review_decisions()
+
+    target_image = output_dir / "selected" / "a.png"
+    target_caption = output_dir / "selected" / "a.txt"
+    assert app is not None
+    assert not image_path.exists()
+    assert target_caption.read_text(encoding="utf-8") == "caption"
+    with Image.open(target_image) as image:
+        assert image.size == (8, 5)
+
+    window.close()
+
+
 def test_caption_meta_shows_size_and_file_size(tmp_path):
     image_path = tmp_path / "a.png"
     Image.new("RGB", (16, 8), color="red").save(image_path)
