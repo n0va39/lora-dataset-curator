@@ -59,6 +59,7 @@ from lora_dataset_curator.duplicate_analysis import (
 )
 from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
+from lora_dataset_curator.storage import ensure_app_data_dirs, load_default_profile
 
 ProgressCallback = Callable[[int, int, str], None]
 DECISION_LABELS = {"move": "이동", "delete": "삭제 예정", "skip": "보류"}
@@ -270,6 +271,8 @@ class MainWindow(QMainWindow):
         self.active_thread: QThread | None = None
         self.active_worker: TaskWorker | None = None
         self.floating_preview: FloatingPreviewWindow | None = None
+        self.app_paths = ensure_app_data_dirs()
+        self.profile = load_default_profile()
 
         self.setWindowTitle("LoRA Dataset Curator")
         self.resize(1280, 800)
@@ -305,12 +308,16 @@ class MainWindow(QMainWindow):
         self.plan_text.setReadOnly(True)
         self.duplicate_summary_label = QLabel("아직 중복 분석을 실행하지 않았습니다.")
         self.use_perceptual_checkbox = QCheckBox("pHash/dHash 사용")
+        duplicate_settings = self.profile.get("duplicates", {})
+        if not isinstance(duplicate_settings, dict):
+            duplicate_settings = {}
+        self.use_perceptual_checkbox.setChecked(bool(duplicate_settings.get("use_perceptual")))
         self.phash_threshold = QSpinBox()
         self.phash_threshold.setRange(0, 64)
-        self.phash_threshold.setValue(6)
+        self.phash_threshold.setValue(int(duplicate_settings.get("phash_threshold", 6)))
         self.dhash_threshold = QSpinBox()
         self.dhash_threshold.setRange(0, 64)
-        self.dhash_threshold.setValue(6)
+        self.dhash_threshold.setValue(int(duplicate_settings.get("dhash_threshold", 6)))
 
         self.group_table = QTableWidget(0, 4)
         self.group_table.setHorizontalHeaderLabels(

@@ -12,6 +12,7 @@ QtCore = pytest.importorskip("PySide6.QtCore")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
+from lora_dataset_curator.storage import ensure_app_data_dirs  # noqa: E402
 from lora_dataset_curator.ui import main_window as main_window_module  # noqa: E402
 from lora_dataset_curator.ui.main_window import MainWindow  # noqa: E402
 
@@ -157,7 +158,7 @@ def test_prepare_cache_button_creates_hash_cache(tmp_path):
     window.prepare_duplicate_cache()
 
     assert app is not None
-    assert (tmp_path / ".lora_dataset_curator" / "hashes.sqlite").exists()
+    assert ensure_app_data_dirs().hash_cache_path.exists()
     assert "캐시 준비 완료" in window.duplicate_summary_label.text()
 
     window.close()

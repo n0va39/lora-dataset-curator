@@ -8,6 +8,7 @@ from PIL import Image
 from lora_dataset_curator import duplicate_analysis
 from lora_dataset_curator.duplicate_analysis import analyze_duplicates, prepare_hash_cache
 from lora_dataset_curator.scanner import scan_dataset
+from lora_dataset_curator.storage import ensure_app_data_dirs
 
 
 def test_analyze_duplicates_groups_identical_files_by_sha256(tmp_path):
@@ -152,7 +153,7 @@ def test_analyze_duplicates_reuses_perceptual_hash_cache(tmp_path, monkeypatch):
 
     assert len(result.groups) == 1
     assert call_count == 2
-    assert (tmp_path / ".lora_dataset_curator" / "hashes.sqlite").exists()
+    assert ensure_app_data_dirs().hash_cache_path.exists()
 
     def fail_perceptual_hashes(path):
         raise AssertionError("hash cache was not used")

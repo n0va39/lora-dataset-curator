@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from lora_dataset_curator import app as cli_app
+from lora_dataset_curator.storage import ensure_app_data_dirs
 
 
 def create_split_dataset(root: Path) -> None:
@@ -85,7 +86,18 @@ def test_prepare_cache_cli_creates_hash_cache(tmp_path, capsys):
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "Prepared hash cache for 1 images" in output
-    assert (tmp_path / ".lora_dataset_curator" / "hashes.sqlite").exists()
+    assert ensure_app_data_dirs().hash_cache_path.exists()
+
+
+def test_paths_cli_creates_storage_layout(capsys):
+    exit_code = cli_app.main(["paths"])
+
+    output = capsys.readouterr().out
+    paths = ensure_app_data_dirs()
+    assert exit_code == 0
+    assert f"Root: {paths.root}" in output
+    assert paths.settings_path.exists()
+    assert paths.default_profile_path.exists()
 
 
 def test_duplicates_cli_reports_perceptual_pair_limit(tmp_path, monkeypatch):

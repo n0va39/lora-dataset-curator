@@ -13,6 +13,7 @@ from .duplicate_analysis import (
 )
 from .models import DuplicateGroup
 from .scanner import scan_dataset
+from .storage import ensure_app_data_dirs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Worker threads for hash calculation (default: CPU based)",
     )
+
+    subparsers.add_parser("paths", help="Print application storage paths")
 
     return parser
 
@@ -148,6 +151,7 @@ def handle_plan(args: argparse.Namespace) -> int:
 
 
 def handle_gui(args: argparse.Namespace) -> int:
+    ensure_app_data_dirs()
     try:
         from .ui.main_window import run_gui
     except ImportError as exc:
@@ -202,7 +206,21 @@ def handle_prepare_cache(args: argparse.Namespace) -> int:
         max_workers=args.workers,
     )
     print(f"Prepared hash cache for {len(records)} images")
-    print(f"Cache: {args.input_dir / '.lora_dataset_curator' / 'hashes.sqlite'}")
+    print(f"Cache: {ensure_app_data_dirs().hash_cache_path}")
+    return 0
+
+
+def handle_paths(_args: argparse.Namespace) -> int:
+    paths = ensure_app_data_dirs()
+    print(f"Root: {paths.root}")
+    print(f"Config: {paths.config_dir}")
+    print(f"Profiles: {paths.profiles_dir}")
+    print(f"Cache: {paths.cache_dir}")
+    print(f"Hash cache: {paths.hash_cache_path}")
+    print(f"Dataset cache: {paths.dataset_cache_dir}")
+    print(f"State: {paths.state_dir}")
+    print(f"Decisions: {paths.decisions_dir}")
+    print(f"Logs: {paths.logs_dir}")
     return 0
 
 
@@ -239,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_duplicates(args)
     if args.command == "prepare-cache":
         return handle_prepare_cache(args)
+    if args.command == "paths":
+        return handle_paths(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

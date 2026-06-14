@@ -75,6 +75,37 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 
 빌드된 exe는 더블클릭하거나 인자 없이 실행하면 GUI가 열립니다.
 
+## 저장 위치
+
+배포 exe 실행 시 앱 데이터는 기본적으로 exe 옆 `data/` 폴더에 저장됩니다. 해당 위치에 쓸 수 없으면 Windows의 `%LOCALAPPDATA%\lora-dataset-curator`를 사용합니다. 개발 또는 테스트에서는 `LORA_DATASET_CURATOR_HOME` 환경변수로 저장 위치를 지정할 수 있습니다.
+
+저장 구조는 아래와 같습니다.
+
+```text
+data/
+  config/
+    settings.json
+  profiles/
+    default.json
+  cache/
+    hashes.sqlite
+    datasets/
+      <dataset-id>/
+        duplicate_groups.json
+  state/
+    decisions/
+      <output-id>.json
+  logs/
+```
+
+현재 경로는 CLI에서 확인할 수 있습니다.
+
+```powershell
+uv run lora-dataset-curator paths
+```
+
+해시 캐시는 데이터셋 폴더 안에 개별 파일로 만들지 않고 `cache/hashes.sqlite` 하나에 저장합니다. 이미지 경로가 바뀌어도 같은 파일 내용이면 SHA256 기준으로 pHash/dHash를 재사용할 수 있습니다.
+
 ## 관련 프로젝트
 
 이미지와 태그 다운로드는 별도 도구에서 수행합니다.

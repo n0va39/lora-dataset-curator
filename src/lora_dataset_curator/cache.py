@@ -9,28 +9,25 @@ from threading import RLock
 from typing import Any
 
 from .models import DuplicateGroup, ImageRecord, SimilarityPair
+from .storage import (
+    decisions_file_path,
+    duplicate_groups_file_path,
+    hash_cache_file_path,
+)
 
-CACHE_DIR_NAME = ".lora_dataset_curator"
-DECISIONS_FILE_NAME = "decisions.json"
-DUPLICATE_GROUPS_FILE_NAME = "duplicate_groups.json"
-HASHES_FILE_NAME = "hashes.sqlite"
 HASH_CACHE_VERSION = 1
 
 
-def cache_dir(output_root: Path | str) -> Path:
-    return Path(output_root).expanduser().resolve() / CACHE_DIR_NAME
-
-
 def decisions_path(output_root: Path | str) -> Path:
-    return cache_dir(output_root) / DECISIONS_FILE_NAME
+    return decisions_file_path(output_root)
 
 
-def duplicate_groups_path(output_root: Path | str) -> Path:
-    return cache_dir(output_root) / DUPLICATE_GROUPS_FILE_NAME
+def duplicate_groups_path(input_root: Path | str) -> Path:
+    return duplicate_groups_file_path(input_root)
 
 
-def hashes_path(input_root: Path | str) -> Path:
-    return cache_dir(input_root) / HASHES_FILE_NAME
+def hashes_path(_input_root: Path | str | None = None) -> Path:
+    return hash_cache_file_path()
 
 
 @dataclass(slots=True)
@@ -41,9 +38,8 @@ class CachedHashes:
 
 
 class HashCache:
-    def __init__(self, input_root: Path | str) -> None:
-        self.root = Path(input_root).expanduser().resolve()
-        self.path = hashes_path(self.root)
+    def __init__(self, _input_root: Path | str) -> None:
+        self.path = hashes_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = RLock()
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
@@ -195,11 +191,7 @@ class HashCache:
             self.connection.commit()
 
     def cache_key(self, path: Path) -> str:
-        resolved = path.expanduser().resolve()
-        try:
-            return resolved.relative_to(self.root).as_posix()
-        except ValueError:
-            return str(resolved)
+        return str(path.expanduser().resolve())
 
 
 def load_decisions(output_root: Path | str) -> dict[str, str]:
@@ -258,7 +250,7 @@ def save_duplicate_result(
             for group in result.groups
         ],
     }
-    write_json(duplicate_groups_path(output_root), data)
+    write_json(duplicate_groups_path(input_root), data)
 
 
 def load_duplicate_result(
@@ -271,7 +263,7 @@ def load_duplicate_result(
     dhash_threshold: int,
     result_type,
 ) -> Any | None:
-    path = duplicate_groups_path(output_root)
+    path = duplicate_groups_path(input_root)
     if not path.exists():
         return None
     data = read_json(path)
