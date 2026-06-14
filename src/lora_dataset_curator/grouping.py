@@ -7,6 +7,42 @@ from .models import DuplicateGroup, ImageRecord, SimilarityPair
 from .similarity import is_duplicate_candidate
 
 
+def image_tag_count(record: ImageRecord) -> int:
+    return sum(
+        len(tags)
+        for tags in (
+            record.tags_artist,
+            record.tags_character,
+            record.tags_copyright,
+            record.tags_general,
+            record.tags_meta,
+        )
+    )
+
+
+def image_quality_components(record: ImageRecord) -> dict[str, int]:
+    return {
+        "resolution": record.resolution_pixels,
+        "file_size": record.file_size or 0,
+        "tags": image_tag_count(record),
+        "metadata": sum(
+            value is not None for value in (record.post_id, record.source_md5, record.source_url)
+        ),
+        "caption": len(record.caption_text),
+    }
+
+
+def image_quality_score(record: ImageRecord) -> int:
+    components = image_quality_components(record)
+    return (
+        components["resolution"] // 10_000
+        + components["file_size"] // 100_000
+        + components["tags"] * 8
+        + components["metadata"] * 50
+        + min(components["caption"] // 20, 50)
+    )
+
+
 class UnionFind:
     def __init__(self, items: list[Path]) -> None:
         self.parent = {item: item for item in items}
@@ -28,15 +64,16 @@ def recommend_keep(records: list[ImageRecord]) -> ImageRecord | None:
     if not records:
         return None
 
-    def score(record: ImageRecord) -> tuple[int, int, int, int]:
-        metadata_score = sum(
-            value is not None for value in (record.post_id, record.source_md5, record.source_url)
-        )
-        caption_score = len(record.caption_text)
-        file_size = record.file_size or 0
-        return (metadata_score, record.resolution_pixels, file_size, caption_score)
-
-    return max(records, key=score)
+    return max(
+        records,
+        key=lambda record: (
+            image_quality_score(record),
+            record.resolution_pixels,
+            record.file_size or 0,
+            image_tag_count(record),
+            record.image_path.name,
+        ),
+    )
 
 
 def build_duplicate_groups(

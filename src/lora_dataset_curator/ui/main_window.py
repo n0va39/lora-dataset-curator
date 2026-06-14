@@ -57,7 +57,8 @@ from lora_dataset_curator.duplicate_analysis import (
     analyze_duplicates,
     prepare_hash_cache,
 )
-from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
+from lora_dataset_curator.grouping import image_quality_components, image_quality_score
+from lora_dataset_curator.models import DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
 from lora_dataset_curator.storage import ensure_app_data_dirs, load_default_profile
 
@@ -163,7 +164,12 @@ class GroupImageTile(QWidget):
         sidecars.append("txt" if record.caption_path else "no txt")
         sidecars.append("json" if record.metadata_path else "no json")
         decision_label = DECISION_LABELS.get(decision, "미결정")
-        self.meta_label.setText(f"{size} | {decision_label} | {', '.join(sidecars)}")
+        components = image_quality_components(record)
+        file_size = format_file_size(record.file_size or 0)
+        self.meta_label.setText(
+            f"score {image_quality_score(record)} | {size} | {file_size} | "
+            f"tags {components['tags']} | {decision_label} | {', '.join(sidecars)}"
+        )
 
 
 class FloatingPreviewWindow(QWidget):
@@ -286,11 +292,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.preview_label = ImagePreview()
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["그룹", "결정", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
+            ["그룹", "점수", "결정", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.configure_interactive_header(
+            self.table,
+            [72, 72, 96, 320, 110, 80, 100, 100, 80],
+        )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setItemDelegate(GroupBoundaryDelegate(self.table))
@@ -304,8 +313,6 @@ class MainWindow(QMainWindow):
         self.metadata_text.setReadOnly(True)
         self.info_text = QPlainTextEdit()
         self.info_text.setReadOnly(True)
-        self.plan_text = QPlainTextEdit()
-        self.plan_text.setReadOnly(True)
         self.duplicate_summary_label = QLabel("아직 중복 분석을 실행하지 않았습니다.")
         self.use_perceptual_checkbox = QCheckBox("pHash/dHash 사용")
         duplicate_settings = self.profile.get("duplicates", {})
@@ -319,22 +326,22 @@ class MainWindow(QMainWindow):
         self.dhash_threshold.setRange(0, 64)
         self.dhash_threshold.setValue(int(duplicate_settings.get("dhash_threshold", 6)))
 
-        self.group_table = QTableWidget(0, 4)
+        self.group_table = QTableWidget(0, 5)
         self.group_table.setHorizontalHeaderLabels(
-            ["그룹", "개수", "이유", "추천 keep"]
+            ["그룹", "개수", "추천 점수", "이유", "추천 keep"]
         )
-        self.group_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.configure_interactive_header(self.group_table, [80, 70, 90, 220, 260])
         self.group_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.group_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.group_table.itemSelectionChanged.connect(self.on_group_selection_changed)
 
-        self.group_member_table = QTableWidget(0, 6)
+        self.group_member_table = QTableWidget(0, 7)
         self.group_member_table.setHorizontalHeaderLabels(
-            ["추천", "결정", "파일", "크기", "캡션", "메타데이터"]
+            ["추천", "점수", "결정", "파일", "크기", "캡션", "메타데이터"]
         )
-        self.group_member_table.horizontalHeader().setSectionResizeMode(
-            2,
-            QHeaderView.ResizeMode.Stretch,
+        self.configure_interactive_header(
+            self.group_member_table,
+            [70, 72, 96, 360, 110, 80, 100],
         )
         self.group_member_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.group_member_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -351,6 +358,17 @@ class MainWindow(QMainWindow):
 
         if input_dir is not None:
             self.scan()
+
+    @staticmethod
+    def configure_interactive_header(table: QTableWidget, widths: list[int]) -> None:
+        table.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        header = table.horizontalHeader()
+        header.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        header.setStretchLastSection(False)
+        header.setSectionsMovable(False)
+        for column, width in enumerate(widths):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            table.setColumnWidth(column, width)
 
     def build_layout(self) -> QWidget:
         container = QWidget()
@@ -421,16 +439,11 @@ class MainWindow(QMainWindow):
         metadata_layout.addWidget(QLabel("메타데이터"))
         metadata_layout.addWidget(self.metadata_text)
 
-        plan_panel = QWidget()
-        plan_layout = QVBoxLayout(plan_panel)
-        plan_layout.addWidget(QLabel("Dry-run 이동 계획"))
-        plan_layout.addWidget(self.plan_text)
-
         self.review_detail_splitter = QSplitter(Qt.Orientation.Vertical)
         self.review_detail_splitter.setChildrenCollapsible(False)
-        for panel in (preview_panel, info_panel, caption_panel, metadata_panel, plan_panel):
+        for panel in (preview_panel, info_panel, caption_panel, metadata_panel):
             self.review_detail_splitter.addWidget(panel)
-        self.review_detail_splitter.setSizes([300, 150, 150, 150, 120])
+        self.review_detail_splitter.setSizes([320, 170, 170, 170])
 
         self.review_splitter = QSplitter()
         self.review_splitter.setChildrenCollapsible(False)
@@ -506,17 +519,6 @@ class MainWindow(QMainWindow):
         preview_button.setMinimumWidth(100)
         preview_button.clicked.connect(self.show_floating_preview)
         command_row.addWidget(preview_button)
-        for label, action in (
-            ("보관", "keep"),
-            ("이동", "move"),
-            ("격리", "quarantine"),
-            ("건너뛰기", "skip"),
-        ):
-            button = QPushButton(label)
-            button.setMinimumWidth(72)
-            button.clicked.connect(lambda _checked=False, name=action: self.show_plan(name))
-            command_row.addWidget(button)
-
         open_button = QPushButton("폴더 열기")
         open_button.setMinimumWidth(92)
         open_button.clicked.connect(self.open_file_location)
@@ -632,6 +634,7 @@ class MainWindow(QMainWindow):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
             values = [
                 self.record_group_ids.get(record.image_path, ""),
+                str(image_quality_score(record)),
                 DECISION_LABELS.get(self.review_decisions.get(str(record.image_path), ""), ""),
                 record.image_path.name,
                 size,
@@ -643,6 +646,8 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if column == 1:
+                    item.setToolTip(format_quality_details(record))
                 self.apply_table_item_style(item, record, row)
                 self.table.setItem(row, column, item)
 
@@ -665,7 +670,6 @@ class MainWindow(QMainWindow):
 
     def set_current_record(self, record: ImageRecord) -> None:
         self.current_record = record
-        self.plan_text.clear()
         self.caption_text.setPlainText(record.caption_text)
         self.caption_meta_label.setText(self.format_caption_meta(record))
         self.metadata_text.setPlainText(
@@ -685,7 +689,6 @@ class MainWindow(QMainWindow):
         self.caption_meta_label.clear()
         self.metadata_text.clear()
         self.info_text.clear()
-        self.plan_text.clear()
 
     def load_preview(self, path: Path) -> None:
         self.preview_label.set_image(path)
@@ -757,15 +760,6 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self.current_record is not None:
             self.load_preview(self.current_record.image_path)
-
-    def show_plan(self, action: ActionName) -> None:
-        if self.current_record is None:
-            return
-        output_dir = Path(self.output_path.text()).expanduser()
-        plan = build_action_plan(self.current_record, output_dir, action, dry_run=True)
-        lines = [f"작업: {plan.action}", "Dry run: true"]
-        lines.extend(f"{move.source} -> {move.target}" for move in plan.moves)
-        self.plan_text.setPlainText("\n".join(lines))
 
     def open_file_location(self) -> None:
         if self.current_record is None:
@@ -962,10 +956,17 @@ class MainWindow(QMainWindow):
         for row, group in enumerate(groups):
             reasons = ", ".join(self.duplicate_result.group_reasons.get(group.group_id, []))
             keep = group.recommended_keep.image_path.name if group.recommended_keep else ""
-            values = [group.group_id, str(len(group.images)), reasons, keep]
+            keep_score = (
+                image_quality_score(group.recommended_keep)
+                if group.recommended_keep
+                else 0
+            )
+            values = [group.group_id, str(len(group.images)), str(keep_score), reasons, keep]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if column == 2 and group.recommended_keep is not None:
+                    item.setToolTip(format_quality_details(group.recommended_keep))
                 self.group_table.setItem(row, column, item)
 
         self.duplicate_summary_label.setText(
@@ -994,6 +995,7 @@ class MainWindow(QMainWindow):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
             values = [
                 "yes" if record == group.recommended_keep else "",
+                str(image_quality_score(record)),
                 DECISION_LABELS.get(self.review_decisions.get(str(record.image_path), ""), ""),
                 record.image_path.name,
                 size,
@@ -1004,6 +1006,8 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setData(Qt.ItemDataRole.UserRole, record)
+                if column == 1:
+                    item.setToolTip(format_quality_details(record))
                 self.apply_member_item_style(item, record)
                 self.group_member_table.setItem(row, column, item)
         if records:
@@ -1015,9 +1019,8 @@ class MainWindow(QMainWindow):
         return sorted(
             group.images,
             key=lambda record: (
+                -image_quality_score(record),
                 record != group.recommended_keep,
-                -record.resolution_pixels,
-                -(record.file_size or 0),
                 record.image_path.name,
             ),
         )
@@ -1175,7 +1178,7 @@ class MainWindow(QMainWindow):
         ]
         return (
             f"크기: {size} | 용량: {file_size} | {group_id} | "
-            f"결정: {decision} | {', '.join(sidecars)}"
+            f"점수: {image_quality_score(record)} | 결정: {decision} | {', '.join(sidecars)}"
         )
 
     @staticmethod
@@ -1206,6 +1209,19 @@ def format_file_size(size: int) -> str:
             return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
         value /= 1024
     return f"{size} B"
+
+
+def format_quality_details(record: ImageRecord) -> str:
+    components = image_quality_components(record)
+    size = f"{record.width}x{record.height}" if record.width and record.height else "unknown"
+    return (
+        f"점수: {image_quality_score(record)}\n"
+        f"해상도: {size} ({components['resolution']:,} px)\n"
+        f"용량: {format_file_size(components['file_size'])}\n"
+        f"태그 수: {components['tags']}\n"
+        f"메타데이터 항목: {components['metadata']}\n"
+        f"캡션 길이: {components['caption']}"
+    )
 
 
 def run_gui(input_dir: Path | None = None, output_dir: Path | None = None) -> int:

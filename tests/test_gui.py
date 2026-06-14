@@ -68,7 +68,7 @@ def test_duplicate_analysis_sorts_review_table_by_group(tmp_path):
     assert window.table.item(0, 0).text() == "G0001"
     assert window.table.item(1, 0).text() == "G0001"
     assert window.table.item(2, 0).text() == ""
-    assert window.table.item(2, 2).text() == "a_ungrouped.png"
+    assert window.table.item(2, 3).text() == "a_ungrouped.png"
     assert window.table.item(0, 0).data(QtCore.Qt.ItemDataRole.UserRole + 1) is True
 
     window.close()
@@ -87,7 +87,7 @@ def test_review_decisions_are_saved_and_loaded(tmp_path):
 
     assert app is not None
     assert next_window.review_decisions[str(tmp_path / "a.png")] == "move"
-    assert next_window.table.item(0, 1).text() == "이동"
+    assert next_window.table.item(0, 2).text() == "이동"
 
     next_window.close()
 
@@ -102,6 +102,7 @@ def test_caption_meta_shows_size_and_file_size(tmp_path):
     assert app is not None
     assert "크기: 16x8" in window.caption_meta_label.text()
     assert "용량:" in window.caption_meta_label.text()
+    assert "점수:" in window.caption_meta_label.text()
 
     window.close()
 
@@ -208,6 +209,10 @@ def test_progress_bar_stays_visible_on_duplicate_tab(tmp_path):
     assert len([size for size in window.review_detail_splitter.sizes() if size > 0]) >= 3
     assert window.duplicate_vertical_splitter.sizes()[0] > 0
     assert window.duplicate_vertical_splitter.sizes()[1] > 0
+    assert (
+        window.table.horizontalHeader().sectionResizeMode(0)
+        == QtWidgets.QHeaderView.ResizeMode.Interactive
+    )
 
     window.close()
 

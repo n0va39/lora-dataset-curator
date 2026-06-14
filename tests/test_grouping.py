@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from lora_dataset_curator.grouping import build_duplicate_groups, recommend_keep
+from lora_dataset_curator.grouping import (
+    build_duplicate_groups,
+    image_quality_score,
+    recommend_keep,
+)
 from lora_dataset_curator.models import ImageRecord, SimilarityPair
 
 
@@ -16,6 +20,26 @@ def test_recommend_keep_prefers_metadata_and_resolution(tmp_path):
     )
 
     assert recommend_keep([small, large]) == large
+    assert image_quality_score(large) > image_quality_score(small)
+
+
+def test_recommend_keep_uses_tag_count_as_quality_signal(tmp_path):
+    fewer_tags = ImageRecord(
+        image_path=tmp_path / "few.jpg",
+        width=100,
+        height=100,
+        file_size=100,
+        tags_general=["a"],
+    )
+    more_tags = ImageRecord(
+        image_path=tmp_path / "many.jpg",
+        width=100,
+        height=100,
+        file_size=100,
+        tags_general=["a", "b", "c"],
+    )
+
+    assert recommend_keep([fewer_tags, more_tags]) == more_tags
 
 
 def test_build_duplicate_groups_from_sha_match(tmp_path):
