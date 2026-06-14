@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -292,13 +293,13 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.preview_label = ImagePreview()
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["그룹", "점수", "결정", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
+            ["그룹", "점수", "결정", "파일", "크기", "캡션", "메타데이터"]
         )
         self.configure_interactive_header(
             self.table,
-            [72, 72, 96, 320, 110, 80, 100, 100, 80],
+            [72, 72, 96, 360, 110, 80, 100],
         )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -423,27 +424,20 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.preview_label, stretch=1)
         preview_layout.addLayout(self.build_action_buttons())
 
-        info_panel = QWidget()
-        info_layout = QVBoxLayout(info_panel)
-        info_layout.addWidget(QLabel("파일 정보"))
-        info_layout.addWidget(self.info_text)
-
         caption_panel = QWidget()
         caption_layout = QVBoxLayout(caption_panel)
         caption_layout.addWidget(QLabel("캡션"))
         caption_layout.addWidget(self.caption_text)
         caption_layout.addWidget(self.caption_meta_label)
 
-        metadata_panel = QWidget()
-        metadata_layout = QVBoxLayout(metadata_panel)
-        metadata_layout.addWidget(QLabel("메타데이터"))
-        metadata_layout.addWidget(self.metadata_text)
+        info_panel = self.build_collapsible_text_panel("파일 정보", self.info_text)
+        metadata_panel = self.build_collapsible_text_panel("메타데이터", self.metadata_text)
 
         self.review_detail_splitter = QSplitter(Qt.Orientation.Vertical)
         self.review_detail_splitter.setChildrenCollapsible(False)
-        for panel in (preview_panel, info_panel, caption_panel, metadata_panel):
+        for panel in (preview_panel, caption_panel, info_panel, metadata_panel):
             self.review_detail_splitter.addWidget(panel)
-        self.review_detail_splitter.setSizes([320, 170, 170, 170])
+        self.review_detail_splitter.setSizes([320, 260, 44, 44])
 
         self.review_splitter = QSplitter()
         self.review_splitter.setChildrenCollapsible(False)
@@ -453,6 +447,17 @@ class MainWindow(QMainWindow):
         self.review_splitter.setStretchFactor(1, 2)
         self.review_splitter.setSizes([760, 520])
         return self.review_splitter
+
+    @staticmethod
+    def build_collapsible_text_panel(title: str, text_widget: QPlainTextEdit) -> QGroupBox:
+        panel = QGroupBox(title)
+        panel.setCheckable(True)
+        panel.setChecked(False)
+        text_widget.setVisible(False)
+        layout = QVBoxLayout(panel)
+        layout.addWidget(text_widget)
+        panel.toggled.connect(text_widget.setVisible)
+        return panel
 
     def build_tabs(self, review_widget: QWidget) -> QTabWidget:
         self.tabs = QTabWidget()
@@ -640,8 +645,6 @@ class MainWindow(QMainWindow):
                 size,
                 "yes" if record.caption_path else "no",
                 "yes" if record.metadata_path else "no",
-                record.post_id or "",
-                record.rating or "",
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -1189,10 +1192,8 @@ class MainWindow(QMainWindow):
             f"메타데이터: {record.metadata_path or '없음'}",
             f"해상도: {record.width or '?'}x{record.height or '?'}",
             f"파일 크기: {record.file_size or 0} bytes",
-            f"Post ID: {record.post_id or ''}",
             f"MD5: {record.source_md5 or ''}",
             f"출처: {record.source_url or ''}",
-            f"등급: {record.rating or ''}",
             f"작가 태그: {', '.join(record.tags_artist)}",
             f"캐릭터 태그: {', '.join(record.tags_character)}",
             f"저작권 태그: {', '.join(record.tags_copyright)}",

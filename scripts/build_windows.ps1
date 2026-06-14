@@ -11,14 +11,16 @@ try {
     --noconfirm `
     --clean `
     --onefile `
+    --windowed `
     --name "LoRA-Dataset-Curator" `
     --specpath "build" `
     --paths "src" `
     "scripts/entrypoint.py"
 
-  & ".\dist\LoRA-Dataset-Curator.exe" --help | Out-Null
-  & ".\dist\LoRA-Dataset-Curator.exe" gui --help | Out-Null
-  & ".\dist\LoRA-Dataset-Curator.exe" duplicates --help | Out-Null
+  $ExePath = Join-Path $RepoRoot "dist\LoRA-Dataset-Curator.exe"
+  if (-not (Test-Path $ExePath)) {
+    throw "Build failed: $ExePath was not created."
+  }
   Write-Host "Build complete: dist/LoRA-Dataset-Curator.exe"
 }
 finally {

@@ -28,6 +28,10 @@ def test_main_window_scans_initial_dataset(tmp_path):
     assert app is not None
     assert len(window.records) == 1
     assert window.table.rowCount() == 1
+    assert [
+        window.table.horizontalHeaderItem(column).text()
+        for column in range(window.table.columnCount())
+    ] == ["그룹", "점수", "결정", "파일", "크기", "캡션", "메타데이터"]
     assert "이미지: 1" in window.summary_label.text()
     assert "캡션: 1개 연결, 0개 누락" in window.summary_label.text()
 
@@ -103,6 +107,10 @@ def test_caption_meta_shows_size_and_file_size(tmp_path):
     assert "크기: 16x8" in window.caption_meta_label.text()
     assert "용량:" in window.caption_meta_label.text()
     assert "점수:" in window.caption_meta_label.text()
+    assert window.info_text.isHidden()
+    assert window.metadata_text.isHidden()
+    assert "Post ID:" not in window.info_text.toPlainText()
+    assert "등급:" not in window.info_text.toPlainText()
 
     window.close()
 
