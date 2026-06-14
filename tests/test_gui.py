@@ -474,6 +474,46 @@ def test_full_size_crop_is_not_saved(tmp_path):
     window.close()
 
 
+def test_batch_crop_ratios_apply_to_all_records(tmp_path):
+    first = tmp_path / "a.png"
+    second = tmp_path / "b.png"
+    Image.new("RGB", (100, 80), color="red").save(first)
+    Image.new("RGB", (200, 120), color="blue").save(second)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.batch_crop_left.setValue(10.0)
+    window.batch_crop_top.setValue(25.0)
+    window.batch_crop_right.setValue(5.0)
+    window.batch_crop_bottom.setValue(10.0)
+    window.batch_crop_button.click()
+
+    assert app is not None
+    assert window.crop_rects[str(first)] == (10, 20, 85, 52)
+    assert window.crop_rects[str(second)] == (20, 30, 170, 78)
+    assert window.crop_enabled_checkbox.isChecked()
+    assert window.crop_left.value() == 10
+    assert window.crop_top.value() == 20
+
+    window.close()
+
+
+def test_batch_crop_zero_ratios_clear_existing_crops(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.set_current_crop_rect((10, 10, 80, 60))
+    window.batch_crop_button.click()
+
+    assert app is not None
+    assert str(image_path) not in window.crop_rects
+    assert not window.crop_enabled_checkbox.isChecked()
+
+    window.close()
+
+
 def test_dragging_crop_to_full_size_clears_crop(tmp_path):
     image_path = tmp_path / "a.png"
     Image.new("RGB", (100, 80), color="red").save(image_path)

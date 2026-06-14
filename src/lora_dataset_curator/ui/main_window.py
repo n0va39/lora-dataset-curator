@@ -22,6 +22,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -781,6 +782,12 @@ class MainWindow(QMainWindow):
         self.crop_square_button.clicked.connect(self.set_center_square_crop)
         self.crop_full_button = QPushButton("전체")
         self.crop_full_button.clicked.connect(self.clear_current_crop)
+        self.batch_crop_left = self.create_crop_ratio_spinbox()
+        self.batch_crop_top = self.create_crop_ratio_spinbox()
+        self.batch_crop_right = self.create_crop_ratio_spinbox()
+        self.batch_crop_bottom = self.create_crop_ratio_spinbox()
+        self.batch_crop_button = QPushButton("비율 일괄 적용")
+        self.batch_crop_button.clicked.connect(self.apply_batch_crop_ratios)
         self.duplicate_summary_label = QLabel("아직 중복 분석을 실행하지 않았습니다.")
         self.use_perceptual_checkbox = QCheckBox("pHash/dHash 사용")
         duplicate_settings = self.profile.get("duplicates", {})
@@ -839,6 +846,15 @@ class MainWindow(QMainWindow):
         spinbox = QSpinBox()
         spinbox.setRange(minimum, 999_999)
         spinbox.valueChanged.connect(self.on_crop_controls_changed)
+        return spinbox
+
+    @staticmethod
+    def create_crop_ratio_spinbox() -> QDoubleSpinBox:
+        spinbox = QDoubleSpinBox()
+        spinbox.setRange(0.0, 99.9)
+        spinbox.setDecimals(1)
+        spinbox.setSingleStep(0.5)
+        spinbox.setSuffix("%")
         return spinbox
 
     def save_current_paths(self) -> None:
@@ -959,6 +975,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.crop_bottom, 1, 4)
         layout.addWidget(self.crop_square_button, 0, 5)
         layout.addWidget(self.crop_full_button, 1, 5)
+        layout.addWidget(QLabel("일괄 비율"), 2, 0)
+        layout.addWidget(QLabel("왼쪽"), 2, 1)
+        layout.addWidget(self.batch_crop_left, 2, 2)
+        layout.addWidget(QLabel("위"), 2, 3)
+        layout.addWidget(self.batch_crop_top, 2, 4)
+        layout.addWidget(QLabel("오른쪽"), 3, 1)
+        layout.addWidget(self.batch_crop_right, 3, 2)
+        layout.addWidget(QLabel("아래"), 3, 3)
+        layout.addWidget(self.batch_crop_bottom, 3, 4)
+        layout.addWidget(self.batch_crop_button, 2, 5, 2, 1)
         layout.setColumnStretch(6, 1)
         return panel
 
@@ -1314,6 +1340,22 @@ class MainWindow(QMainWindow):
         return (left, top, width - left - right, height - top - bottom)
 
     @staticmethod
+    def crop_rect_from_ratio_margins(
+        record: ImageRecord,
+        left_percent: float,
+        top_percent: float,
+        right_percent: float,
+        bottom_percent: float,
+    ) -> tuple[int, int, int, int]:
+        width = record.width or 1
+        height = record.height or 1
+        left = round(width * left_percent / 100)
+        top = round(height * top_percent / 100)
+        right = round(width * right_percent / 100)
+        bottom = round(height * bottom_percent / 100)
+        return MainWindow.crop_rect_from_margins(record, left, top, right, bottom)
+
+    @staticmethod
     def is_full_crop_rect(record: ImageRecord, crop_rect: tuple[int, int, int, int]) -> bool:
         x, y, crop_width, crop_height = MainWindow.clamp_crop_rect(record, crop_rect)
         return x == 0 and y == 0 and crop_width == (record.width or 1) and crop_height == (
@@ -1360,6 +1402,50 @@ class MainWindow(QMainWindow):
         x = (self.current_record.width - side) // 2
         y = (self.current_record.height - side) // 2
         self.set_current_crop_rect((x, y, side, side))
+
+    def apply_batch_crop_ratios(self) -> None:
+        if not self.records:
+            self.status_label.setText("스캔된 이미지가 없습니다.")
+            return
+
+        left_percent = self.batch_crop_left.value()
+        top_percent = self.batch_crop_top.value()
+        right_percent = self.batch_crop_right.value()
+        bottom_percent = self.batch_crop_bottom.value()
+        applied = 0
+        cleared = 0
+        skipped = 0
+        for record in self.records:
+            if not record.width or not record.height:
+                skipped += 1
+                continue
+            key = str(record.image_path)
+            crop_rect = self.crop_rect_from_ratio_margins(
+                record,
+                left_percent,
+                top_percent,
+                right_percent,
+                bottom_percent,
+            )
+            if self.is_full_crop_rect(record, crop_rect):
+                if key in self.crop_rects:
+                    cleared += 1
+                self.crop_rects.pop(key, None)
+                continue
+            self.crop_rects[key] = crop_rect
+            applied += 1
+
+        self.save_crop_rects()
+        self.sync_crop_controls(self.current_record)
+        self.update_preview()
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.show_record(self.current_record)
+        message = f"일괄 자르기 설정: {applied}개 적용"
+        if cleared:
+            message += f", {cleared}개 해제"
+        if skipped:
+            message += f", {skipped}개 건너뜀"
+        self.status_label.setText(message)
 
     def clear_current_crop(self) -> None:
         if self.current_record is None:
