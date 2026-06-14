@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QObject, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QAction, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -33,7 +34,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lora_dataset_curator.actions import build_action_plan
+from lora_dataset_curator.actions import append_action_log, build_action_plan, execute_plan
+from lora_dataset_curator.cache import (
+    load_decisions,
+    load_duplicate_result,
+    save_decisions,
+    save_duplicate_result,
+)
 from lora_dataset_curator.duplicate_analysis import (
     DEFAULT_MAX_PERCEPTUAL_PAIRS,
     DuplicateAnalysisResult,
@@ -43,6 +50,22 @@ from lora_dataset_curator.models import ActionName, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
 
 ProgressCallback = Callable[[int, int, str], None]
+DECISION_LABELS = {"move": "이동", "delete": "삭제 예정", "skip": "보류"}
+DECISION_KEYS = {
+    Qt.Key.Key_A: "move",
+    Qt.Key.Key_D: "delete",
+    Qt.Key.Key_S: "skip",
+}
+
+
+class GroupBoundaryDelegate(QStyledItemDelegate):
+    def paint(self, painter: QPainter, option, index) -> None:
+        super().paint(painter, option, index)
+        if index.data(Qt.ItemDataRole.UserRole + 1):
+            painter.save()
+            painter.setPen(QPen(QColor("#4a4a4a"), 3))
+            painter.drawLine(option.rect.topLeft(), option.rect.topRight())
+            painter.restore()
 
 
 class ImagePreview(QWidget):
@@ -117,7 +140,7 @@ class GroupImageTile(QWidget):
         layout.addWidget(self.title_label)
         layout.addWidget(self.meta_label)
 
-    def set_record(self, record: ImageRecord, *, recommended: bool) -> None:
+    def set_record(self, record: ImageRecord, *, recommended: bool, decision: str = "") -> None:
         self.preview.set_image(record.image_path)
         prefix = "[keep] " if recommended else ""
         self.title_label.setText(f"{prefix}{record.image_path.name}")
@@ -125,7 +148,57 @@ class GroupImageTile(QWidget):
         sidecars = []
         sidecars.append("txt" if record.caption_path else "no txt")
         sidecars.append("json" if record.metadata_path else "no json")
-        self.meta_label.setText(f"{size} | {', '.join(sidecars)}")
+        decision_label = DECISION_LABELS.get(decision, "미결정")
+        self.meta_label.setText(f"{size} | {decision_label} | {', '.join(sidecars)}")
+
+
+class FloatingPreviewWindow(QWidget):
+    def __init__(self, owner: MainWindow) -> None:
+        super().__init__(
+            owner,
+            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self.owner = owner
+        self.setWindowTitle("이미지 검수")
+        self.resize(900, 900)
+        self.preview = ImagePreview(
+            minimum_width=640,
+            minimum_height=640,
+            maximum_height=16777215,
+        )
+        self.status_label = QLabel("←/→ 이동 | A 이동 | D 삭제 예정 | S 보류")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.preview, stretch=1)
+        layout.addWidget(self.status_label)
+
+    def show_record(self, record: ImageRecord | None) -> None:
+        if record is None:
+            self.preview.clear()
+            self.status_label.setText("선택된 이미지 없음")
+            return
+        self.preview.set_image(record.image_path)
+        decision = self.owner.review_decisions.get(str(record.image_path), "")
+        label = DECISION_LABELS.get(decision, "미결정")
+        self.status_label.setText(
+            f"{record.image_path.name} | {label} | ←/→ 이동 | A 이동 | D 삭제 예정 | S 보류"
+        )
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        key = event.key()
+        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+            self.owner.select_relative_record(1)
+            return
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Up):
+            self.owner.select_relative_record(-1)
+            return
+        action = DECISION_KEYS.get(key)
+        if action is not None:
+            self.owner.set_current_decision(action)
+            self.owner.select_relative_record(1)
+            return
+        super().keyPressEvent(event)
 
 
 class TaskWorker(QObject):
@@ -157,11 +230,13 @@ class MainWindow(QMainWindow):
         self.records: list[ImageRecord] = []
         self.scan_order: dict[Path, int] = {}
         self.record_group_ids: dict[Path, str] = {}
+        self.review_decisions: dict[str, str] = {}
         self.current_record: ImageRecord | None = None
         self.duplicate_result: DuplicateAnalysisResult | None = None
         self.background_tasks = background_tasks
         self.active_thread: QThread | None = None
         self.active_worker: TaskWorker | None = None
+        self.floating_preview: FloatingPreviewWindow | None = None
 
         self.setWindowTitle("LoRA Dataset Curator")
         self.resize(1280, 800)
@@ -175,13 +250,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.preview_label = ImagePreview()
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["그룹", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
+            ["그룹", "결정", "파일", "크기", "캡션", "메타데이터", "Post ID", "등급"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setItemDelegate(GroupBoundaryDelegate(self.table))
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
 
         self.caption_text = QPlainTextEdit()
@@ -210,12 +286,12 @@ class MainWindow(QMainWindow):
         self.group_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.group_table.itemSelectionChanged.connect(self.on_group_selection_changed)
 
-        self.group_member_table = QTableWidget(0, 5)
+        self.group_member_table = QTableWidget(0, 6)
         self.group_member_table.setHorizontalHeaderLabels(
-            ["추천", "파일", "크기", "캡션", "메타데이터"]
+            ["추천", "결정", "파일", "크기", "캡션", "메타데이터"]
         )
         self.group_member_table.horizontalHeader().setSectionResizeMode(
-            1,
+            2,
             QHeaderView.ResizeMode.Stretch,
         )
         self.group_member_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -248,6 +324,8 @@ class MainWindow(QMainWindow):
         output_button.clicked.connect(self.choose_output_dir)
         self.scan_button = QPushButton("스캔")
         self.scan_button.clicked.connect(self.scan)
+        self.execute_button = QPushButton("실행")
+        self.execute_button.clicked.connect(self.execute_review_decisions)
 
         input_row = QHBoxLayout()
         input_row.addWidget(self.input_path)
@@ -263,6 +341,7 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         top_bar.addLayout(form, stretch=1)
         top_bar.addWidget(self.scan_button)
+        top_bar.addWidget(self.execute_button)
         return top_bar
 
     def build_progress_row(self) -> QHBoxLayout:
@@ -343,6 +422,9 @@ class MainWindow(QMainWindow):
 
     def build_action_buttons(self) -> QHBoxLayout:
         row = QHBoxLayout()
+        preview_button = QPushButton("큰 미리보기")
+        preview_button.clicked.connect(self.show_floating_preview)
+        row.addWidget(preview_button)
         for label, action in (
             ("보관", "keep"),
             ("이동", "move"),
@@ -359,6 +441,16 @@ class MainWindow(QMainWindow):
         source_button.clicked.connect(self.open_source_url)
         row.addWidget(open_button)
         row.addWidget(source_button)
+        for label, action in (
+            ("A 이동 결정", "move"),
+            ("D 삭제 예정", "delete"),
+            ("S 보류", "skip"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, name=action: self.set_current_decision(name)
+            )
+            row.addWidget(button)
         return row
 
     def create_menu(self) -> None:
@@ -417,6 +509,7 @@ class MainWindow(QMainWindow):
         self.records = records
         self.scan_order = {record.image_path: index for index, record in enumerate(records)}
         self.record_group_ids = {}
+        self.review_decisions = load_decisions(self.output_root())
 
         self.populate_table()
         self.clear_duplicate_groups()
@@ -431,6 +524,7 @@ class MainWindow(QMainWindow):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
             values = [
                 self.record_group_ids.get(record.image_path, ""),
+                DECISION_LABELS.get(self.review_decisions.get(str(record.image_path), ""), ""),
                 record.image_path.name,
                 size,
                 "yes" if record.caption_path else "no",
@@ -441,6 +535,7 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.apply_table_item_style(item, record, row)
                 self.table.setItem(row, column, item)
 
         caption_count = sum(record.caption_path is not None for record in self.records)
@@ -471,6 +566,8 @@ class MainWindow(QMainWindow):
         )
         self.info_text.setPlainText(self.format_info(record))
         self.load_preview(record.image_path)
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.show_record(record)
 
     def clear_details(self) -> None:
         self.current_record = None
@@ -482,6 +579,69 @@ class MainWindow(QMainWindow):
 
     def load_preview(self, path: Path) -> None:
         self.preview_label.set_image(path)
+
+    def show_floating_preview(self) -> None:
+        if self.floating_preview is None:
+            self.floating_preview = FloatingPreviewWindow(self)
+        self.floating_preview.show_record(self.current_record)
+        self.floating_preview.show()
+        self.floating_preview.raise_()
+        self.floating_preview.activateWindow()
+
+    def select_relative_record(self, offset: int) -> None:
+        if not self.records:
+            return
+        try:
+            current_index = self.records.index(self.current_record) if self.current_record else 0
+        except ValueError:
+            current_index = 0
+        next_index = min(max(current_index + offset, 0), len(self.records) - 1)
+        self.table.selectRow(next_index)
+        self.table.scrollToItem(self.table.item(next_index, 0))
+
+    def set_current_decision(self, action: str) -> None:
+        if self.current_record is None:
+            return
+        self.review_decisions[str(self.current_record.image_path)] = action
+        save_decisions(self.output_root(), self.review_decisions)
+        self.current_record.review_status = action
+        self.populate_table()
+        self.select_record(self.current_record)
+        self.refresh_current_group_members()
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.show_record(self.current_record)
+
+    def select_record(self, record: ImageRecord) -> None:
+        try:
+            row = self.records.index(record)
+        except ValueError:
+            return
+        self.table.selectRow(row)
+
+    def refresh_current_group_members(self) -> None:
+        if self.duplicate_result is None:
+            return
+        selected = self.group_table.selectionModel().selectedRows()
+        if not selected:
+            return
+        row = selected[0].row()
+        if 0 <= row < len(self.duplicate_result.groups):
+            self.populate_group_members(self.duplicate_result.groups[row])
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        key = event.key()
+        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+            self.select_relative_record(1)
+            return
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Up):
+            self.select_relative_record(-1)
+            return
+        action = DECISION_KEYS.get(key)
+        if action is not None:
+            self.set_current_decision(action)
+            self.select_relative_record(1)
+            return
+        super().keyPressEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -508,6 +668,44 @@ class MainWindow(QMainWindow):
             return
         QDesktopServices.openUrl(QUrl(self.current_record.source_url))
 
+    def execute_review_decisions(self) -> None:
+        actionable = [
+            record
+            for record in self.records
+            if self.review_decisions.get(str(record.image_path)) in {"move", "delete"}
+        ]
+        if not actionable:
+            QMessageBox.information(
+                self,
+                "실행",
+                "이동 또는 삭제 예정으로 결정한 이미지가 없습니다.",
+            )
+            return
+        confirm = QMessageBox.question(
+            self,
+            "결정 실행",
+            f"{len(actionable)}개 이미지와 연결된 sidecar 파일을 출력 폴더로 이동합니다.\n"
+            "삭제 예정은 실제 삭제가 아니라 rejected 폴더로 이동합니다.\n"
+            "계속할까요?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        log_path = self.output_root() / "action_log.csv"
+        moved_count = 0
+        for record in actionable:
+            action = self.review_decisions.get(str(record.image_path))
+            if action not in {"move", "delete"}:
+                continue
+            plan = build_action_plan(record, self.output_root(), action, dry_run=False)
+            execute_plan(plan)
+            append_action_log(log_path, record, plan)
+            moved_count += 1
+
+        save_decisions(self.output_root(), self.review_decisions)
+        QMessageBox.information(self, "실행 완료", f"{moved_count}개 이미지 결정을 실행했습니다.")
+        self.scan()
+
     def analyze_duplicate_groups(self) -> None:
         if not self.records:
             QMessageBox.information(self, "중복 분석", "먼저 데이터셋을 스캔하세요.")
@@ -521,6 +719,21 @@ class MainWindow(QMainWindow):
                 "현재 bucket 후보 검색은 pHash/dHash 기준값 15까지만 지원합니다.\n"
                 "기준값을 낮춘 뒤 다시 실행하세요.",
             )
+            return
+
+        input_dir = Path(self.input_path.text()).expanduser()
+        cached_result = load_duplicate_result(
+            self.output_root(),
+            input_dir,
+            self.records,
+            use_perceptual=use_perceptual,
+            phash_threshold=self.phash_threshold.value(),
+            dhash_threshold=self.dhash_threshold.value(),
+            result_type=DuplicateAnalysisResult,
+        )
+        if cached_result is not None:
+            self.finish_duplicate_analysis(cached_result)
+            self.set_busy(False, "캐시된 중복 그룹을 불러왔습니다.")
             return
 
         if self.background_tasks:
@@ -555,6 +768,16 @@ class MainWindow(QMainWindow):
         self.sort_records_by_duplicate_groups()
         self.populate_table()
         self.populate_group_table()
+        if self.records:
+            save_duplicate_result(
+                self.output_root(),
+                Path(self.input_path.text()).expanduser(),
+                self.records,
+                result,
+                use_perceptual=self.use_perceptual_checkbox.isChecked(),
+                phash_threshold=self.phash_threshold.value(),
+                dhash_threshold=self.dhash_threshold.value(),
+            )
 
     def clear_duplicate_groups(self) -> None:
         self.duplicate_result = None
@@ -626,6 +849,7 @@ class MainWindow(QMainWindow):
             size = f"{record.width}x{record.height}" if record.width and record.height else ""
             values = [
                 "yes" if record == group.recommended_keep else "",
+                DECISION_LABELS.get(self.review_decisions.get(str(record.image_path), ""), ""),
                 record.image_path.name,
                 size,
                 "yes" if record.caption_path else "no",
@@ -635,6 +859,7 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setData(Qt.ItemDataRole.UserRole, record)
+                self.apply_member_item_style(item, record)
                 self.group_member_table.setItem(row, column, item)
         if records:
             self.group_member_table.selectRow(0)
@@ -660,7 +885,11 @@ class MainWindow(QMainWindow):
         self.clear_group_previews()
         for index, record in enumerate(records):
             tile = GroupImageTile()
-            tile.set_record(record, recommended=record == group.recommended_keep)
+            tile.set_record(
+                record,
+                recommended=record == group.recommended_keep,
+                decision=self.review_decisions.get(str(record.image_path), ""),
+            )
             self.group_preview_layout.addWidget(tile, index // 3, index % 3)
 
     def clear_group_previews(self) -> None:
@@ -739,12 +968,48 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy: bool, message: str) -> None:
         self.scan_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy)
+        self.execute_button.setEnabled(not busy)
         self.status_label.setText(message)
         if busy:
             self.progress_bar.setRange(0, 0)
         else:
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(1)
+
+    def apply_table_item_style(
+        self,
+        item: QTableWidgetItem,
+        record: ImageRecord,
+        row: int,
+    ) -> None:
+        group_id = self.record_group_ids.get(record.image_path)
+        previous_group = (
+            self.record_group_ids.get(self.records[row - 1].image_path)
+            if row > 0
+            else None
+        )
+        item.setData(Qt.ItemDataRole.UserRole + 1, bool(group_id and group_id != previous_group))
+        if group_id:
+            item.setBackground(QColor("#f1f5f9"))
+        decision = self.review_decisions.get(str(record.image_path))
+        if decision == "move":
+            item.setBackground(QColor("#dcfce7"))
+        elif decision == "delete":
+            item.setBackground(QColor("#fee2e2"))
+        elif decision == "skip":
+            item.setBackground(QColor("#fef9c3"))
+
+    def apply_member_item_style(self, item: QTableWidgetItem, record: ImageRecord) -> None:
+        decision = self.review_decisions.get(str(record.image_path))
+        if decision == "move":
+            item.setBackground(QColor("#dcfce7"))
+        elif decision == "delete":
+            item.setBackground(QColor("#fee2e2"))
+        elif decision == "skip":
+            item.setBackground(QColor("#fef9c3"))
+
+    def output_root(self) -> Path:
+        return Path(self.output_path.text()).expanduser().resolve()
 
     @staticmethod
     def format_info(record: ImageRecord) -> str:

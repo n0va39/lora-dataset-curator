@@ -12,6 +12,7 @@ QtCore = pytest.importorskip("PySide6.QtCore")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
+from lora_dataset_curator.ui import main_window as main_window_module  # noqa: E402
 from lora_dataset_curator.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -66,7 +67,80 @@ def test_duplicate_analysis_sorts_review_table_by_group(tmp_path):
     assert window.table.item(0, 0).text() == "G0001"
     assert window.table.item(1, 0).text() == "G0001"
     assert window.table.item(2, 0).text() == ""
-    assert window.table.item(2, 1).text() == "a_ungrouped.png"
+    assert window.table.item(2, 2).text() == "a_ungrouped.png"
+    assert window.table.item(0, 0).data(QtCore.Qt.ItemDataRole.UserRole + 1) is True
+
+    window.close()
+
+
+def test_review_decisions_are_saved_and_loaded(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.set_current_decision("move")
+    window.close()
+
+    next_window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+
+    assert app is not None
+    assert next_window.review_decisions[str(tmp_path / "a.png")] == "move"
+    assert next_window.table.item(0, 1).text() == "이동"
+
+    next_window.close()
+
+
+def test_duplicate_groups_are_loaded_from_cache(tmp_path, monkeypatch):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 8), color="blue").save(tmp_path / "b.png")
+    (tmp_path / "a.json").write_text('{"id": 10}', encoding="utf-8")
+    (tmp_path / "b.json").write_text('{"id": 10}', encoding="utf-8")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.analyze_duplicate_groups()
+    window.close()
+
+    def fail_analyze(*args, **kwargs):
+        raise AssertionError("cache was not used")
+
+    monkeypatch.setattr(main_window_module, "analyze_duplicates", fail_analyze)
+    cached_window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    cached_window.analyze_duplicate_groups()
+
+    assert app is not None
+    assert cached_window.group_table.rowCount() == 1
+    assert "캐시된 중복 그룹" in cached_window.status_label.text()
+
+    cached_window.close()
+
+
+def test_execute_review_decisions_moves_linked_files(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    caption_path = tmp_path / "a.txt"
+    Image.new("RGB", (16, 8), color="red").save(image_path)
+    caption_path.write_text("caption", encoding="utf-8")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    output_dir = tmp_path / "out"
+    window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
+    window.set_current_decision("delete")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
+
+    window.execute_review_decisions()
+
+    assert app is not None
+    assert not image_path.exists()
+    assert not caption_path.exists()
+    assert (output_dir / "rejected" / "a.png").exists()
+    assert (output_dir / "rejected" / "a.txt").exists()
 
     window.close()
 
