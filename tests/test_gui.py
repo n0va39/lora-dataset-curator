@@ -474,6 +474,82 @@ def test_full_size_crop_is_not_saved(tmp_path):
     window.close()
 
 
+def test_dragging_crop_to_full_size_clears_crop(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.set_current_crop_rect((4, 4, 92, 72))
+    window.show_floating_preview()
+    preview = window.floating_preview
+    assert preview is not None
+    app.processEvents()
+
+    image_x, image_y, image_width, image_height = preview.preview.image_display_rect()
+    display_rect = preview.preview.display_crop_rect()
+    assert display_rect is not None
+    rect_x, rect_y, _, _ = display_rect
+    QtTest.QTest.mousePress(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=QtCore.QPoint(rect_x, rect_y),
+    )
+    QtTest.QTest.mouseMove(preview.preview, QtCore.QPoint(image_x, image_y))
+    QtTest.QTest.mouseRelease(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=QtCore.QPoint(image_x, image_y),
+    )
+    app.processEvents()
+
+    display_rect = preview.preview.display_crop_rect()
+    assert display_rect is not None
+    rect_x, rect_y, rect_width, rect_height = display_rect
+    QtTest.QTest.mousePress(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=QtCore.QPoint(rect_x + rect_width, rect_y + rect_height),
+    )
+    QtTest.QTest.mouseMove(
+        preview.preview,
+        QtCore.QPoint(image_x + image_width - 1, image_y + image_height - 1),
+    )
+    QtTest.QTest.mouseRelease(
+        preview.preview,
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=QtCore.QPoint(image_x + image_width - 1, image_y + image_height - 1),
+    )
+    app.processEvents()
+
+    assert str(image_path) not in window.crop_rects
+    assert not window.crop_enabled_checkbox.isChecked()
+
+    window.close()
+
+
+def test_floating_preview_always_on_top_toggle(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.show_floating_preview()
+    preview = window.floating_preview
+
+    assert app is not None
+    assert preview is not None
+    assert preview.always_on_top_checkbox.isChecked()
+    assert bool(preview.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+
+    preview.always_on_top_checkbox.setChecked(False)
+    app.processEvents()
+
+    assert not bool(preview.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+
+    window.close()
+
+
 def test_execute_review_decisions_moves_linked_files(tmp_path, monkeypatch):
     image_path = tmp_path / "a.png"
     caption_path = tmp_path / "a.txt"

@@ -271,11 +271,23 @@ class ImagePreview(QWidget):
             return None
         x = max(image_x, min(point.x(), image_x + image_width - 1))
         y = max(image_y, min(point.y(), image_y + image_height - 1))
-        scale_x = self.pixmap.width() / image_width
-        scale_y = self.pixmap.height() / image_height
+        if x <= image_x:
+            mapped_x = 0
+        elif x >= image_x + image_width - 1:
+            mapped_x = self.pixmap.width() - 1
+        else:
+            mapped_x = round((x - image_x) * (self.pixmap.width() - 1) / max(1, image_width - 1))
+        if y <= image_y:
+            mapped_y = 0
+        elif y >= image_y + image_height - 1:
+            mapped_y = self.pixmap.height() - 1
+        else:
+            mapped_y = round(
+                (y - image_y) * (self.pixmap.height() - 1) / max(1, image_height - 1)
+            )
         return (
-            max(0, min(int((x - image_x) * scale_x), self.pixmap.width() - 1)),
-            max(0, min(int((y - image_y) * scale_y), self.pixmap.height() - 1)),
+            max(0, min(mapped_x, self.pixmap.width() - 1)),
+            max(0, min(mapped_y, self.pixmap.height() - 1)),
         )
 
     def display_crop_rect(self) -> tuple[int, int, int, int] | None:
@@ -457,6 +469,9 @@ class FloatingPreviewWindow(QWidget):
         )
         self.preview.set_crop_edit_enabled(True)
         self.preview.set_crop_changed_callback(self.owner.set_current_crop_rect)
+        self.always_on_top_checkbox = QCheckBox("항상 위")
+        self.always_on_top_checkbox.setChecked(True)
+        self.always_on_top_checkbox.toggled.connect(self.set_always_on_top)
         self.filename_label = QLabel("선택된 이미지 없음")
         self.filename_label.setWordWrap(True)
         self.filename_label.setFixedHeight(48)
@@ -483,6 +498,10 @@ class FloatingPreviewWindow(QWidget):
         detail_layout = QVBoxLayout(detail_panel)
         detail_layout.setContentsMargins(0, 0, 0, 0)
         detail_layout.setSpacing(8)
+        detail_layout.addWidget(
+            self.always_on_top_checkbox,
+            alignment=Qt.AlignmentFlag.AlignRight,
+        )
         detail_layout.addWidget(self.preview, stretch=1)
         detail_layout.addWidget(self.filename_label)
         detail_layout.addWidget(info_panel)
@@ -494,6 +513,19 @@ class FloatingPreviewWindow(QWidget):
         layout.addWidget(self.thumbnail_list)
         layout.addWidget(detail_panel, stretch=1)
         self.create_shortcuts()
+
+    def set_always_on_top(self, enabled: bool) -> None:
+        flags = Qt.WindowType.Window
+        if enabled:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        was_visible = self.isVisible()
+        geometry = self.geometry()
+        self.setWindowFlags(flags)
+        self.setGeometry(geometry)
+        if was_visible:
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     @staticmethod
     def add_preview_info_row(
