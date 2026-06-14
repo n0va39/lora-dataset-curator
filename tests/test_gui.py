@@ -9,6 +9,7 @@ from PIL import Image
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 QtCore = pytest.importorskip("PySide6.QtCore")
+QtGui = pytest.importorskip("PySide6.QtGui")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
@@ -181,6 +182,42 @@ def test_floating_preview_metadata_layout_is_stable(tmp_path):
 
     assert window.current_record is not None
     assert window.current_record.image_path.name == "a_long_filename_for_wrap.png"
+
+    window.close()
+
+
+def test_floating_preview_loads_thumbnails_lazily(tmp_path, monkeypatch):
+    for index in range(40):
+        Image.new("RGB", (16 + index, 8), color="red").save(tmp_path / f"{index:03d}.png")
+
+    loaded = []
+
+    def fake_thumbnail(path):
+        loaded.append(path)
+        return QtGui.QPixmap()
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(
+        main_window_module.FloatingPreviewWindow,
+        "make_thumbnail",
+        staticmethod(fake_thumbnail),
+    )
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.show_floating_preview()
+    app.processEvents()
+
+    preview = window.floating_preview
+
+    assert app is not None
+    assert preview is not None
+    assert preview.thumbnail_list.count() == 40
+    assert len(loaded) == preview.THUMBNAIL_PRELOAD_RADIUS + 1
+
+    loaded.clear()
+    preview.thumbnail_list.setCurrentRow(30)
+    app.processEvents()
+
+    assert 0 < len(loaded) <= (preview.THUMBNAIL_PRELOAD_RADIUS * 2) + 1
 
     window.close()
 

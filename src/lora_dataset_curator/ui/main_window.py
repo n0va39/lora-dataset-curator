@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QIcon,
+    QImageReader,
     QKeySequence,
     QPainter,
     QPen,
@@ -178,6 +179,9 @@ class GroupImageTile(QWidget):
 
 
 class FloatingPreviewWindow(QWidget):
+    THUMBNAIL_SIZE = 96
+    THUMBNAIL_PRELOAD_RADIUS = 12
+
     def __init__(self, owner: MainWindow) -> None:
         super().__init__(
             owner,
@@ -187,10 +191,11 @@ class FloatingPreviewWindow(QWidget):
         self.setWindowTitle("이미지 검수")
         self.resize(1080, 900)
         self.thumbnail_records: list[ImageRecord] = []
+        self.loaded_thumbnail_paths: set[Path] = set()
         self.syncing_thumbnails = False
         self.thumbnail_list = QListWidget()
         self.thumbnail_list.setFixedWidth(190)
-        self.thumbnail_list.setIconSize(QSize(96, 96))
+        self.thumbnail_list.setIconSize(QSize(self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE))
         self.thumbnail_list.currentRowChanged.connect(self.on_thumbnail_row_changed)
 
         self.preview = ImagePreview(
@@ -259,34 +264,70 @@ class FloatingPreviewWindow(QWidget):
         self.syncing_thumbnails = True
         self.thumbnail_list.clear()
         self.thumbnail_records = list(records)
+        self.loaded_thumbnail_paths.clear()
         for record in self.thumbnail_records:
-            item = QListWidgetItem(
-                QIcon(self.make_thumbnail(record.image_path)),
-                record.image_path.name,
-            )
+            item = QListWidgetItem(record.image_path.name)
             item.setToolTip(str(record.image_path))
             self.thumbnail_list.addItem(item)
         self.syncing_thumbnails = False
 
     @staticmethod
     def make_thumbnail(path: Path) -> QPixmap:
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        image_size = reader.size()
+        target_size = QSize(
+            FloatingPreviewWindow.THUMBNAIL_SIZE,
+            FloatingPreviewWindow.THUMBNAIL_SIZE,
+        )
+        if image_size.isValid():
+            image_size.scale(target_size, Qt.AspectRatioMode.KeepAspectRatio)
+            reader.setScaledSize(image_size)
+        image = reader.read()
+        if image.isNull():
             return QPixmap()
-        return pixmap.scaled(
-            QSize(96, 96),
+        return QPixmap.fromImage(image).scaled(
+            target_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+    def load_nearby_thumbnails(self, center_row: int) -> None:
+        if center_row < 0:
+            return
+        first_row = max(0, center_row - self.THUMBNAIL_PRELOAD_RADIUS)
+        last_row = min(len(self.thumbnail_records), center_row + self.THUMBNAIL_PRELOAD_RADIUS + 1)
+        self.thumbnail_list.setUpdatesEnabled(False)
+        try:
+            for row in range(first_row, last_row):
+                record = self.thumbnail_records[row]
+                if record.image_path in self.loaded_thumbnail_paths:
+                    continue
+                item = self.thumbnail_list.item(row)
+                if item is None:
+                    continue
+                thumbnail = self.make_thumbnail(record.image_path)
+                if not thumbnail.isNull():
+                    item.setIcon(QIcon(thumbnail))
+                self.loaded_thumbnail_paths.add(record.image_path)
+        finally:
+            self.thumbnail_list.setUpdatesEnabled(True)
 
     def sync_thumbnail_selection(self, record: ImageRecord | None) -> None:
         self.refresh_thumbnail_list()
         if record is None:
             return
-        try:
-            row = self.thumbnail_records.index(record)
-        except ValueError:
+        row = next(
+            (
+                index
+                for index, candidate in enumerate(self.thumbnail_records)
+                if candidate.image_path == record.image_path
+            ),
+            -1,
+        )
+        if row < 0:
             return
+        self.load_nearby_thumbnails(row)
         self.syncing_thumbnails = True
         self.thumbnail_list.setCurrentRow(row)
         item = self.thumbnail_list.item(row)
@@ -297,6 +338,7 @@ class FloatingPreviewWindow(QWidget):
     def on_thumbnail_row_changed(self, row: int) -> None:
         if self.syncing_thumbnails or row < 0 or row >= len(self.thumbnail_records):
             return
+        self.load_nearby_thumbnails(row)
         self.owner.select_record(self.thumbnail_records[row])
 
     def create_shortcuts(self) -> None:
