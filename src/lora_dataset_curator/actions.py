@@ -62,16 +62,27 @@ def execute_plan(
     if plan.dry_run:
         return list(plan.moves)
 
-    write_trash_manifest(plan)
     moves = list(plan.moves)
+    if plan.action == "delete":
+        existing_moves = tuple(move for move in moves if move.source.exists())
+        write_trash_manifest(
+            ActionPlan(
+                action=plan.action,
+                moves=existing_moves,
+                dry_run=plan.dry_run,
+                reason=plan.reason,
+            )
+        )
     if crop_rect is not None and moves and plan.action in {"keep", "move"}:
         image_move = moves[0]
-        if should_crop_image(image_move.source, crop_rect):
+        if image_move.source.exists() and should_crop_image(image_move.source, crop_rect):
             apply_crop_to_image(image_move.source, image_move.target, crop_rect)
             image_move.source.unlink()
             moves = moves[1:]
 
     for move in moves:
+        if not move.source.exists():
+            continue
         move.target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(move.source), str(move.target))
     return list(plan.moves)

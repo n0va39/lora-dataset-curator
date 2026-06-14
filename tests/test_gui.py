@@ -591,6 +591,35 @@ def test_floating_preview_always_on_top_toggle(tmp_path):
     window.close()
 
 
+def test_clear_cache_menu_action_removes_cache(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    paths = ensure_app_data_dirs()
+    paths.hash_cache_path.write_text("cache", encoding="utf-8")
+    cached_group = paths.dataset_cache_dir / "dataset" / "duplicate_groups.json"
+    cached_group.parent.mkdir(parents=True)
+    cached_group.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
+
+    window.clear_cache_items()
+
+    assert app is not None
+    assert not paths.hash_cache_path.exists()
+    assert not cached_group.exists()
+    assert paths.dataset_cache_dir.is_dir()
+    assert "캐시 삭제" in window.status_label.text()
+
+    window.close()
+
+
 def test_execute_review_decisions_moves_deleted_files_to_trash(tmp_path, monkeypatch):
     monkeypatch.setenv(APP_HOME_ENV, str(tmp_path / "data"))
     image_path = tmp_path / "a.png"

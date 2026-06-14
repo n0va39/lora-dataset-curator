@@ -90,6 +90,26 @@ def test_execute_plan_skips_crop_when_rect_is_full_image(tmp_path, monkeypatch):
         assert image.size == (10, 8)
 
 
+def test_execute_plan_skips_missing_sources(tmp_path):
+    image_path = tmp_path / "1.png"
+    caption_path = tmp_path / "1.txt"
+    Image.new("RGB", (10, 8), color="red").save(image_path)
+    caption_path.write_text("caption", encoding="utf-8")
+    record = ImageRecord(
+        image_path=image_path,
+        caption_path=caption_path,
+        stem="1",
+        extension=".png",
+    )
+    plan = build_action_plan(record, tmp_path / "output", "move", dry_run=False)
+    image_path.unlink()
+
+    execute_plan(plan, crop_rect=(1, 1, 8, 6))
+
+    assert not image_path.exists()
+    assert (tmp_path / "output" / "1.txt").read_text(encoding="utf-8") == "caption"
+
+
 def test_execute_delete_plan_moves_to_app_data_trash_and_restores(tmp_path, monkeypatch):
     monkeypatch.setenv(APP_HOME_ENV, str(tmp_path / "data"))
     image_path = tmp_path / "1.png"

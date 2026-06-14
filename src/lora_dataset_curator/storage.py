@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -196,3 +197,17 @@ def crop_settings_file_path(output_root: Path | str) -> Path:
 
 def hash_cache_file_path() -> Path:
     return ensure_app_data_dirs().hash_cache_path
+
+
+def clear_cache() -> int:
+    paths = ensure_app_data_dirs()
+    deleted_entries = 0
+    for child in list(paths.cache_dir.iterdir()):
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        deleted_entries += 1
+    paths.cache_dir.mkdir(parents=True, exist_ok=True)
+    paths.dataset_cache_dir.mkdir(parents=True, exist_ok=True)
+    return deleted_entries

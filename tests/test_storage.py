@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from lora_dataset_curator.storage import (
+    clear_cache,
     dataset_state_dir,
     duplicate_groups_file_path,
     ensure_app_data_dirs,
@@ -83,3 +84,22 @@ def test_settings_are_saved_with_defaults(tmp_path):
     assert settings["active_profile"] == "default"
     assert settings["last_input_dir"] == str(input_dir)
     assert settings["last_output_dir"] == str(output_dir)
+
+
+def test_clear_cache_removes_only_cache_contents(tmp_path):
+    paths = ensure_app_data_dirs()
+    dataset_cache = paths.dataset_cache_dir / "dataset" / "duplicate_groups.json"
+    dataset_cache.parent.mkdir(parents=True)
+    dataset_cache.write_text("{}", encoding="utf-8")
+    paths.hash_cache_path.write_text("cache", encoding="utf-8")
+    paths.logs_dir.joinpath("log.txt").write_text("log", encoding="utf-8")
+
+    deleted = clear_cache()
+
+    assert deleted == 2
+    assert paths.cache_dir.is_dir()
+    assert paths.dataset_cache_dir.is_dir()
+    assert not dataset_cache.exists()
+    assert not paths.hash_cache_path.exists()
+    assert paths.settings_path.exists()
+    assert paths.logs_dir.joinpath("log.txt").exists()

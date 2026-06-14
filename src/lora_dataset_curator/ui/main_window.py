@@ -69,6 +69,7 @@ from lora_dataset_curator.grouping import image_quality_components, image_qualit
 from lora_dataset_curator.models import DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
 from lora_dataset_curator.storage import (
+    clear_cache,
     ensure_app_data_dirs,
     load_default_profile,
     load_settings,
@@ -1099,6 +1100,22 @@ class MainWindow(QMainWindow):
         scan_action.triggered.connect(self.scan)
         file_menu.addAction(scan_action)
 
+        file_menu.addSeparator()
+
+        open_data_action = QAction("데이터 폴더 열기", self)
+        open_data_action.triggered.connect(self.open_app_data_folder)
+        file_menu.addAction(open_data_action)
+
+        open_cache_action = QAction("캐시 폴더 열기", self)
+        open_cache_action.triggered.connect(self.open_cache_folder)
+        file_menu.addAction(open_cache_action)
+
+        clear_cache_action = QAction("캐시 삭제", self)
+        clear_cache_action.triggered.connect(self.clear_cache_items)
+        file_menu.addAction(clear_cache_action)
+
+        file_menu.addSeparator()
+
         restore_trash_action = QAction("휴지통 복구", self)
         restore_trash_action.triggered.connect(self.restore_trash_items)
         file_menu.addAction(restore_trash_action)
@@ -1139,6 +1156,28 @@ class MainWindow(QMainWindow):
         input_root = Path(self.input_path.text()).expanduser()
         if input_root.exists():
             self.scan()
+
+    def open_app_data_folder(self) -> None:
+        paths = ensure_app_data_dirs()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.root)))
+
+    def open_cache_folder(self) -> None:
+        paths = ensure_app_data_dirs()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.cache_dir)))
+
+    def clear_cache_items(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "캐시 삭제",
+            "해시와 중복 분석 캐시를 삭제합니다. 설정, 결정 기록, 휴지통은 유지됩니다. 계속할까요?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        deleted_entries = clear_cache()
+        self.clear_duplicate_groups()
+        message = f"캐시 삭제: {deleted_entries}개 항목 삭제"
+        self.status_label.setText(message)
+        QMessageBox.information(self, "캐시 삭제", message)
 
     def empty_trash_items(self) -> None:
         answer = QMessageBox.question(
