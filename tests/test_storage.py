@@ -6,6 +6,7 @@ from lora_dataset_curator.storage import (
     dataset_state_dir,
     duplicate_groups_file_path,
     ensure_app_data_dirs,
+    load_default_profile,
     stable_path_key,
 )
 
@@ -27,6 +28,7 @@ def test_app_storage_layout_is_created(tmp_path):
     settings = json.loads(paths.settings_path.read_text(encoding="utf-8"))
     profile = json.loads(paths.default_profile_path.read_text(encoding="utf-8"))
     assert settings["active_profile"] == "default"
+    assert profile["duplicates"]["use_perceptual"] is True
     assert profile["duplicates"]["phash_threshold"] == 6
 
 
@@ -38,3 +40,26 @@ def test_dataset_cache_uses_stable_path_key(tmp_path):
 
     assert state_dir.name == stable_path_key(dataset)
     assert duplicate_groups_file_path(dataset) == state_dir / "duplicate_groups.json"
+
+
+def test_old_default_profile_enables_perceptual_by_default(tmp_path):
+    paths = ensure_app_data_dirs()
+    paths.default_profile_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "default",
+                "duplicates": {
+                    "use_perceptual": False,
+                    "phash_threshold": 6,
+                    "dhash_threshold": 6,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    profile = load_default_profile()
+
+    assert profile["duplicates"]["use_perceptual"] is True

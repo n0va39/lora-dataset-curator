@@ -37,10 +37,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 DEFAULT_PROFILE: dict[str, Any] = {
-    "version": 1,
+    "version": 2,
     "name": DEFAULT_PROFILE_NAME,
     "duplicates": {
-        "use_perceptual": False,
+        "use_perceptual": True,
         "phash_threshold": 6,
         "dhash_threshold": 6,
         "max_perceptual_pairs": 500_000,
@@ -137,7 +137,20 @@ def load_settings() -> dict[str, Any]:
 
 
 def load_default_profile() -> dict[str, Any]:
-    return load_json(ensure_app_data_dirs().default_profile_path)
+    loaded = load_json(ensure_app_data_dirs().default_profile_path)
+    profile = DEFAULT_PROFILE | loaded
+    loaded_duplicates = loaded.get("duplicates", {})
+    if not isinstance(loaded_duplicates, dict):
+        loaded_duplicates = {}
+    duplicates = DEFAULT_PROFILE["duplicates"] | loaded_duplicates
+    try:
+        loaded_version = int(loaded.get("version", 0) or 0)
+    except (TypeError, ValueError):
+        loaded_version = 0
+    if loaded_version < 2:
+        duplicates["use_perceptual"] = True
+    profile["duplicates"] = duplicates
+    return profile
 
 
 def stable_path_key(path: Path | str) -> str:

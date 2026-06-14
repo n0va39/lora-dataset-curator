@@ -118,9 +118,10 @@ class ImagePreview(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), self.palette().base())
         painter.setPen(self.palette().mid().color())
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        border_rect = self.rect().adjusted(1, 1, -2, -2)
+        painter.drawRect(border_rect)
 
-        content_rect = self.rect().adjusted(8, 8, -8, -8)
+        content_rect = border_rect.adjusted(10, 10, -10, -10)
         if self.pixmap.isNull():
             painter.setPen(self.palette().text().color())
             painter.drawText(content_rect, Qt.AlignmentFlag.AlignCenter, self.message)
@@ -319,7 +320,9 @@ class MainWindow(QMainWindow):
         duplicate_settings = self.profile.get("duplicates", {})
         if not isinstance(duplicate_settings, dict):
             duplicate_settings = {}
-        self.use_perceptual_checkbox.setChecked(bool(duplicate_settings.get("use_perceptual")))
+        self.use_perceptual_checkbox.setChecked(
+            bool(duplicate_settings.get("use_perceptual", True))
+        )
         self.phash_threshold = QSpinBox()
         self.phash_threshold.setRange(0, 64)
         self.phash_threshold.setValue(int(duplicate_settings.get("phash_threshold", 6)))
@@ -421,11 +424,13 @@ class MainWindow(QMainWindow):
 
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(12, 12, 12, 6)
         preview_layout.addWidget(self.preview_label, stretch=1)
         preview_layout.addLayout(self.build_action_buttons())
 
         caption_panel = QWidget()
         caption_layout = QVBoxLayout(caption_panel)
+        caption_layout.setContentsMargins(12, 6, 12, 6)
         caption_layout.addWidget(QLabel("캡션"))
         caption_layout.addWidget(self.caption_text)
         caption_layout.addWidget(self.caption_meta_label)

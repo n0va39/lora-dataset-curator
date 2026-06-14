@@ -34,6 +34,7 @@ def test_main_window_scans_initial_dataset(tmp_path):
     ] == ["그룹", "점수", "결정", "파일", "크기", "캡션", "메타데이터"]
     assert "이미지: 1" in window.summary_label.text()
     assert "캡션: 1개 연결, 0개 누락" in window.summary_label.text()
+    assert window.use_perceptual_checkbox.isChecked()
 
     window.close()
 
@@ -46,6 +47,7 @@ def test_main_window_populates_duplicate_group_tab(tmp_path):
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.use_perceptual_checkbox.setChecked(False)
     window.analyze_duplicate_groups()
 
     assert app is not None
@@ -66,6 +68,7 @@ def test_duplicate_analysis_sorts_review_table_by_group(tmp_path):
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.use_perceptual_checkbox.setChecked(False)
     window.analyze_duplicate_groups()
 
     assert app is not None
@@ -239,8 +242,11 @@ def test_preview_widget_does_not_overlap_file_info(tmp_path):
         window,
         QtCore.QPoint(0, window.preview_label.height()),
     ).y()
+    preview_top = window.preview_label.mapTo(window, QtCore.QPoint(0, 0)).y()
+    detail_top = window.review_detail_splitter.mapTo(window, QtCore.QPoint(0, 0)).y()
     info_top = window.info_text.mapTo(window, QtCore.QPoint(0, 0)).y()
 
+    assert preview_top > detail_top
     assert preview_bottom <= info_top
     assert window.preview_label.height() <= window.preview_label.maximumHeight()
 
@@ -254,6 +260,7 @@ def test_background_duplicate_analysis_completes_for_no_candidate_dataset(tmp_pa
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = MainWindow(output_dir=tmp_path / "out", background_tasks=True)
     window.finish_scan(scan_dataset(tmp_path))
+    window.use_perceptual_checkbox.setChecked(False)
     window.analyze_duplicate_groups()
 
     deadline = time.monotonic() + 5
