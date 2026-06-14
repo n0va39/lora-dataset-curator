@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 QtCore = pytest.importorskip("PySide6.QtCore")
 QtGui = pytest.importorskip("PySide6.QtGui")
+QtTest = pytest.importorskip("PySide6.QtTest")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
@@ -176,10 +177,10 @@ def test_crop_settings_are_saved_loaded_and_previewed(tmp_path):
     output_dir = tmp_path / "out"
     window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
     window.crop_enabled_checkbox.setChecked(True)
-    window.crop_x.setValue(2)
-    window.crop_y.setValue(3)
-    window.crop_width.setValue(10)
-    window.crop_height.setValue(6)
+    window.crop_left.setValue(2)
+    window.crop_top.setValue(3)
+    window.crop_right.setValue(8)
+    window.crop_bottom.setValue(3)
     window.close()
 
     next_window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
@@ -188,10 +189,10 @@ def test_crop_settings_are_saved_loaded_and_previewed(tmp_path):
     assert next_window.crop_rects[str(image_path)] == (2, 3, 10, 6)
     assert next_window.preview_label.crop_rect == (2, 3, 10, 6)
     assert next_window.crop_enabled_checkbox.isChecked()
-    assert next_window.crop_x.value() == 2
-    assert next_window.crop_y.value() == 3
-    assert next_window.crop_width.value() == 10
-    assert next_window.crop_height.value() == 6
+    assert next_window.crop_left.value() == 2
+    assert next_window.crop_top.value() == 3
+    assert next_window.crop_right.value() == 8
+    assert next_window.crop_bottom.value() == 3
 
     next_window.close()
 
@@ -206,10 +207,10 @@ def test_execute_review_decisions_applies_crop_to_moved_image(tmp_path, monkeypa
     output_dir = tmp_path / "out"
     window = MainWindow(input_dir=tmp_path, output_dir=output_dir, background_tasks=False)
     window.crop_enabled_checkbox.setChecked(True)
-    window.crop_x.setValue(4)
-    window.crop_y.setValue(2)
-    window.crop_width.setValue(8)
-    window.crop_height.setValue(5)
+    window.crop_left.setValue(4)
+    window.crop_top.setValue(2)
+    window.crop_right.setValue(8)
+    window.crop_bottom.setValue(5)
     window.set_current_decision("move")
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
@@ -389,6 +390,52 @@ def test_prepare_cache_button_creates_hash_cache(tmp_path):
     assert app is not None
     assert ensure_app_data_dirs().hash_cache_path.exists()
     assert "캐시 준비 완료" in window.duplicate_summary_label.text()
+
+    window.close()
+
+
+def test_floating_preview_drag_sets_crop_rect(tmp_path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.show_floating_preview()
+    preview = window.floating_preview
+
+    assert app is not None
+    assert preview is not None
+    preview.show()
+    app.processEvents()
+
+    image_x, image_y, image_width, image_height = preview.preview.image_display_rect()
+    start = QtCore.QPoint(
+        image_x + int(image_width * 0.2),
+        image_y + int(image_height * 0.25),
+    )
+    end = QtCore.QPoint(
+        image_x + int(image_width * 0.8),
+        image_y + int(image_height * 0.75),
+    )
+
+    QtTest.QTest.mousePress(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=start)
+    QtTest.QTest.mouseMove(preview.preview, end)
+    QtTest.QTest.mouseRelease(preview.preview, QtCore.Qt.MouseButton.LeftButton, pos=end)
+    app.processEvents()
+
+    crop_rect = window.crop_rects[str(image_path)]
+
+    assert crop_rect[0] > 0
+    assert crop_rect[1] > 0
+    assert crop_rect[2] < 100
+    assert crop_rect[3] < 80
+    assert preview.preview.crop_rect == crop_rect
+    assert window.preview_label.crop_rect == crop_rect
+    assert window.crop_enabled_checkbox.isChecked()
+    assert window.crop_left.value() == crop_rect[0]
+    assert window.crop_top.value() == crop_rect[1]
+    assert window.crop_right.value() == 100 - crop_rect[0] - crop_rect[2]
+    assert window.crop_bottom.value() == 80 - crop_rect[1] - crop_rect[3]
 
     window.close()
 

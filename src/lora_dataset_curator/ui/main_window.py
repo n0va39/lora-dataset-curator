@@ -104,6 +104,9 @@ class ImagePreview(QWidget):
         super().__init__()
         self.pixmap = QPixmap()
         self.crop_rect: tuple[int, int, int, int] | None = None
+        self.crop_edit_enabled = False
+        self.crop_drag_start: tuple[int, int] | None = None
+        self.crop_changed_callback: Callable[[tuple[int, int, int, int]], None] | None = None
         self.message = "선택된 이미지 없음"
         self.setMinimumSize(minimum_width, minimum_height)
         if maximum_height > 0:
@@ -124,9 +127,20 @@ class ImagePreview(QWidget):
         self.crop_rect = crop_rect
         self.update()
 
+    def set_crop_edit_enabled(self, enabled: bool) -> None:
+        self.crop_edit_enabled = enabled
+        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def set_crop_changed_callback(
+        self,
+        callback: Callable[[tuple[int, int, int, int]], None] | None,
+    ) -> None:
+        self.crop_changed_callback = callback
+
     def clear(self) -> None:
         self.pixmap = QPixmap()
         self.crop_rect = None
+        self.crop_drag_start = None
         self.message = "선택된 이미지 없음"
         self.update()
 
@@ -144,17 +158,27 @@ class ImagePreview(QWidget):
             painter.drawText(content_rect, Qt.AlignmentFlag.AlignCenter, self.message)
             return
 
+        x, y, scaled_width, scaled_height = self.image_display_rect()
         scaled = self.pixmap.scaled(
-            content_rect.size(),
+            QSize(scaled_width, scaled_height),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x = content_rect.x() + (content_rect.width() - scaled.width()) // 2
-        y = content_rect.y() + (content_rect.height() - scaled.height()) // 2
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawPixmap(x, y, scaled)
         if self.crop_rect is not None:
-            self.draw_crop_overlay(painter, x, y, scaled.width(), scaled.height())
+            self.draw_crop_overlay(painter, x, y, scaled_width, scaled_height)
+
+    def image_display_rect(self) -> tuple[int, int, int, int]:
+        if self.pixmap.isNull():
+            return (0, 0, 0, 0)
+        border_rect = self.rect().adjusted(1, 1, -2, -2)
+        content_rect = border_rect.adjusted(10, 10, -10, -10)
+        scaled_size = self.pixmap.size()
+        scaled_size.scale(content_rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        x = content_rect.x() + (content_rect.width() - scaled_size.width()) // 2
+        y = content_rect.y() + (content_rect.height() - scaled_size.height()) // 2
+        return (x, y, scaled_size.width(), scaled_size.height())
 
     def draw_crop_overlay(
         self,
@@ -176,13 +200,79 @@ class ImagePreview(QWidget):
 
         painter.save()
         overlay = QColor(0, 0, 0, 90)
-        painter.fillRect(image_x, image_y, image_width, image_height, overlay)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.fillRect(rect_x, rect_y, rect_width, rect_height, QColor(0, 0, 0, 0))
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.fillRect(image_x, image_y, image_width, max(0, rect_y - image_y), overlay)
+        painter.fillRect(
+            image_x,
+            rect_y + rect_height,
+            image_width,
+            max(0, image_y + image_height - (rect_y + rect_height)),
+            overlay,
+        )
+        painter.fillRect(image_x, rect_y, max(0, rect_x - image_x), rect_height, overlay)
+        painter.fillRect(
+            rect_x + rect_width,
+            rect_y,
+            max(0, image_x + image_width - (rect_x + rect_width)),
+            rect_height,
+            overlay,
+        )
         painter.setPen(QPen(QColor("#22c55e"), 3))
         painter.drawRect(rect_x, rect_y, rect_width, rect_height)
         painter.restore()
+
+    def map_widget_to_image(self, point) -> tuple[int, int] | None:
+        if self.pixmap.isNull():
+            return None
+        image_x, image_y, image_width, image_height = self.image_display_rect()
+        if image_width <= 0 or image_height <= 0:
+            return None
+        x = max(image_x, min(point.x(), image_x + image_width - 1))
+        y = max(image_y, min(point.y(), image_y + image_height - 1))
+        scale_x = self.pixmap.width() / image_width
+        scale_y = self.pixmap.height() / image_height
+        return (
+            max(0, min(int((x - image_x) * scale_x), self.pixmap.width() - 1)),
+            max(0, min(int((y - image_y) * scale_y), self.pixmap.height() - 1)),
+        )
+
+    def update_drag_crop(self, point) -> None:
+        if self.crop_drag_start is None:
+            return
+        mapped = self.map_widget_to_image(point)
+        if mapped is None:
+            return
+        start_x, start_y = self.crop_drag_start
+        end_x, end_y = mapped
+        left = min(start_x, end_x)
+        top = min(start_y, end_y)
+        right = max(start_x, end_x)
+        bottom = max(start_y, end_y)
+        crop_rect = (left, top, max(1, right - left + 1), max(1, bottom - top + 1))
+        self.set_crop_rect(crop_rect)
+        if self.crop_changed_callback is not None:
+            self.crop_changed_callback(crop_rect)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if self.crop_edit_enabled and event.button() == Qt.MouseButton.LeftButton:
+            mapped = self.map_widget_to_image(event.position().toPoint())
+            if mapped is not None:
+                self.crop_drag_start = mapped
+                self.update_drag_crop(event.position().toPoint())
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self.crop_edit_enabled and self.crop_drag_start is not None:
+            self.update_drag_crop(event.position().toPoint())
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self.crop_edit_enabled and event.button() == Qt.MouseButton.LeftButton:
+            self.update_drag_crop(event.position().toPoint())
+            self.crop_drag_start = None
+            return
+        super().mouseReleaseEvent(event)
 
 
 class GroupImageTile(QWidget):
@@ -246,6 +336,8 @@ class FloatingPreviewWindow(QWidget):
             minimum_height=640,
             maximum_height=16777215,
         )
+        self.preview.set_crop_edit_enabled(True)
+        self.preview.set_crop_changed_callback(self.owner.set_current_crop_rect)
         self.filename_label = QLabel("선택된 이미지 없음")
         self.filename_label.setWordWrap(True)
         self.filename_label.setFixedHeight(48)
@@ -261,7 +353,10 @@ class FloatingPreviewWindow(QWidget):
         self.file_type_value = self.add_preview_info_row(info_layout, 2, "형식", "-")
         self.decision_value = self.add_preview_info_row(info_layout, 3, "현재 결정", "-")
 
-        self.guide_label = QLabel("←/→ 또는 ↑/↓ 이동 | A 이동 결정 | D 삭제 예정 | S 보류")
+        self.guide_label = QLabel(
+            "드래그: 자를 뒤 남길 영역 지정 | ←/→ 또는 ↑/↓ 이동 | "
+            "A 이동 결정 | D 삭제 예정 | S 보류"
+        )
         self.guide_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.guide_label.setWordWrap(True)
 
@@ -527,10 +622,10 @@ class MainWindow(QMainWindow):
         self.info_text.setReadOnly(True)
         self.crop_enabled_checkbox = QCheckBox("자르기 적용")
         self.crop_enabled_checkbox.toggled.connect(self.on_crop_controls_changed)
-        self.crop_x = self.create_crop_spinbox()
-        self.crop_y = self.create_crop_spinbox()
-        self.crop_width = self.create_crop_spinbox(minimum=1)
-        self.crop_height = self.create_crop_spinbox(minimum=1)
+        self.crop_left = self.create_crop_spinbox()
+        self.crop_top = self.create_crop_spinbox()
+        self.crop_right = self.create_crop_spinbox()
+        self.crop_bottom = self.create_crop_spinbox()
         self.crop_square_button = QPushButton("중앙 정사각형")
         self.crop_square_button.clicked.connect(self.set_center_square_crop)
         self.crop_full_button = QPushButton("전체")
@@ -703,14 +798,14 @@ class MainWindow(QMainWindow):
         panel = QGroupBox("자르기")
         layout = QGridLayout(panel)
         layout.addWidget(self.crop_enabled_checkbox, 0, 0)
-        layout.addWidget(QLabel("X"), 0, 1)
-        layout.addWidget(self.crop_x, 0, 2)
-        layout.addWidget(QLabel("Y"), 0, 3)
-        layout.addWidget(self.crop_y, 0, 4)
-        layout.addWidget(QLabel("W"), 1, 1)
-        layout.addWidget(self.crop_width, 1, 2)
-        layout.addWidget(QLabel("H"), 1, 3)
-        layout.addWidget(self.crop_height, 1, 4)
+        layout.addWidget(QLabel("왼쪽"), 0, 1)
+        layout.addWidget(self.crop_left, 0, 2)
+        layout.addWidget(QLabel("위"), 0, 3)
+        layout.addWidget(self.crop_top, 0, 4)
+        layout.addWidget(QLabel("오른쪽"), 1, 1)
+        layout.addWidget(self.crop_right, 1, 2)
+        layout.addWidget(QLabel("아래"), 1, 3)
+        layout.addWidget(self.crop_bottom, 1, 4)
         layout.addWidget(self.crop_square_button, 0, 5)
         layout.addWidget(self.crop_full_button, 1, 5)
         layout.setColumnStretch(6, 1)
@@ -987,10 +1082,10 @@ class MainWindow(QMainWindow):
             enabled = record is not None and record.width is not None and record.height is not None
             for widget in (
                 self.crop_enabled_checkbox,
-                self.crop_x,
-                self.crop_y,
-                self.crop_width,
-                self.crop_height,
+                self.crop_left,
+                self.crop_top,
+                self.crop_right,
+                self.crop_bottom,
                 self.crop_square_button,
                 self.crop_full_button,
             ):
@@ -1003,25 +1098,26 @@ class MainWindow(QMainWindow):
 
             width = record.width or 1
             height = record.height or 1
-            self.crop_x.setRange(0, max(0, width - 1))
-            self.crop_y.setRange(0, max(0, height - 1))
-            self.crop_width.setRange(1, width)
-            self.crop_height.setRange(1, height)
+            self.crop_left.setRange(0, max(0, width - 1))
+            self.crop_right.setRange(0, max(0, width - 1))
+            self.crop_top.setRange(0, max(0, height - 1))
+            self.crop_bottom.setRange(0, max(0, height - 1))
 
             crop_rect = self.crop_rects.get(str(record.image_path))
             if crop_rect is None:
                 self.crop_enabled_checkbox.setChecked(False)
-                self.crop_x.setValue(0)
-                self.crop_y.setValue(0)
-                self.crop_width.setValue(width)
-                self.crop_height.setValue(height)
+                self.crop_left.setValue(0)
+                self.crop_top.setValue(0)
+                self.crop_right.setValue(0)
+                self.crop_bottom.setValue(0)
             else:
-                x, y, crop_width, crop_height = self.clamp_crop_rect(record, crop_rect)
+                crop_rect = self.clamp_crop_rect(record, crop_rect)
+                left, top, right, bottom = self.crop_margins_from_rect(record, crop_rect)
                 self.crop_enabled_checkbox.setChecked(True)
-                self.crop_x.setValue(x)
-                self.crop_y.setValue(y)
-                self.crop_width.setValue(crop_width)
-                self.crop_height.setValue(crop_height)
+                self.crop_left.setValue(left)
+                self.crop_top.setValue(top)
+                self.crop_right.setValue(right)
+                self.crop_bottom.setValue(bottom)
             self.preview_label.set_crop_rect(crop_rect)
         finally:
             self.syncing_crop_controls = False
@@ -1040,6 +1136,32 @@ class MainWindow(QMainWindow):
         crop_height = max(1, min(crop_height, height - y))
         return (x, y, crop_width, crop_height)
 
+    @staticmethod
+    def crop_margins_from_rect(
+        record: ImageRecord,
+        crop_rect: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int]:
+        width = record.width or 1
+        height = record.height or 1
+        x, y, crop_width, crop_height = MainWindow.clamp_crop_rect(record, crop_rect)
+        return (x, y, max(0, width - x - crop_width), max(0, height - y - crop_height))
+
+    @staticmethod
+    def crop_rect_from_margins(
+        record: ImageRecord,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> tuple[int, int, int, int]:
+        width = record.width or 1
+        height = record.height or 1
+        left = max(0, min(left, width - 1))
+        top = max(0, min(top, height - 1))
+        right = max(0, min(right, width - left - 1))
+        bottom = max(0, min(bottom, height - top - 1))
+        return (left, top, width - left - right, height - top - bottom)
+
     def on_crop_controls_changed(self) -> None:
         if self.syncing_crop_controls or self.current_record is None:
             return
@@ -1053,20 +1175,14 @@ class MainWindow(QMainWindow):
                 self.floating_preview.show_record(self.current_record)
             return
 
-        crop_rect = self.clamp_crop_rect(
+        crop_rect = self.crop_rect_from_margins(
             self.current_record,
-            (
-                self.crop_x.value(),
-                self.crop_y.value(),
-                self.crop_width.value(),
-                self.crop_height.value(),
-            ),
+            self.crop_left.value(),
+            self.crop_top.value(),
+            self.crop_right.value(),
+            self.crop_bottom.value(),
         )
-        self.crop_rects[key] = crop_rect
-        self.save_crop_rects()
-        self.preview_label.set_crop_rect(crop_rect)
-        if self.floating_preview is not None and self.floating_preview.isVisible():
-            self.floating_preview.show_record(self.current_record)
+        self.set_current_crop_rect(crop_rect)
 
     def set_center_square_crop(self) -> None:
         if (
@@ -1078,26 +1194,29 @@ class MainWindow(QMainWindow):
         side = min(self.current_record.width, self.current_record.height)
         x = (self.current_record.width - side) // 2
         y = (self.current_record.height - side) // 2
-        self.syncing_crop_controls = True
-        try:
-            self.crop_enabled_checkbox.setChecked(True)
-            self.crop_x.setValue(x)
-            self.crop_y.setValue(y)
-            self.crop_width.setValue(side)
-            self.crop_height.setValue(side)
-        finally:
-            self.syncing_crop_controls = False
-        self.on_crop_controls_changed()
+        self.set_current_crop_rect((x, y, side, side))
 
     def clear_current_crop(self) -> None:
         if self.current_record is None:
             return
-        self.syncing_crop_controls = True
-        try:
-            self.crop_enabled_checkbox.setChecked(False)
-        finally:
-            self.syncing_crop_controls = False
-        self.on_crop_controls_changed()
+        key = str(self.current_record.image_path)
+        self.crop_rects.pop(key, None)
+        self.save_crop_rects()
+        self.sync_crop_controls(self.current_record)
+        self.preview_label.set_crop_rect(None)
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.preview.set_crop_rect(None)
+
+    def set_current_crop_rect(self, crop_rect: tuple[int, int, int, int]) -> None:
+        if self.current_record is None:
+            return
+        crop_rect = self.clamp_crop_rect(self.current_record, crop_rect)
+        self.crop_rects[str(self.current_record.image_path)] = crop_rect
+        self.save_crop_rects()
+        self.preview_label.set_crop_rect(crop_rect)
+        self.sync_crop_controls(self.current_record)
+        if self.floating_preview is not None and self.floating_preview.isVisible():
+            self.floating_preview.preview.set_crop_rect(crop_rect)
 
     def save_crop_rects(self) -> None:
         save_crop_settings(self.output_root(), self.crop_rects)
