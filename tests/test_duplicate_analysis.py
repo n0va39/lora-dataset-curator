@@ -200,3 +200,18 @@ def test_perceptual_hash_cache_survives_image_move(tmp_path, monkeypatch):
 
     assert len(result.groups) == 1
     assert {record.image_path.name for record in result.groups[0].images} == {"a.png", "b.png"}
+
+
+def test_prepare_hash_cache_rebuilds_corrupt_cache_file(tmp_path):
+    Image.new("RGB", (8, 8), color="red").save(tmp_path / "a.png")
+    cache_path = ensure_app_data_dirs().hash_cache_path
+    cache_path.write_text("not a sqlite database", encoding="utf-8")
+
+    prepare_hash_cache(
+        scan_dataset(tmp_path),
+        hash_cache_root=tmp_path,
+        include_perceptual=False,
+    )
+
+    assert cache_path.exists()
+    assert list(cache_path.parent.glob("hashes.sqlite.corrupt-*"))

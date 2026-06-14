@@ -42,8 +42,12 @@ class HashCache:
         self.path = hashes_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = RLock()
-        self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-        self.ensure_schema()
+        self.connection: sqlite3.Connection | None = None
+        try:
+            self.open()
+        except sqlite3.DatabaseError:
+            self.backup_invalid_cache()
+            self.open()
 
     def __enter__(self) -> HashCache:
         return self
@@ -52,11 +56,26 @@ class HashCache:
         self.close()
 
     def close(self) -> None:
-        self.connection.close()
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def open(self) -> None:
+        self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        self.ensure_schema()
+
+    def backup_invalid_cache(self) -> None:
+        self.close()
+        if not self.path.exists():
+            return
+        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        backup_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
+        self.path.replace(backup_path)
 
     def ensure_schema(self) -> None:
+        connection = self.require_connection()
         with self.lock:
-            self.connection.execute(
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS image_hashes (
                     path TEXT PRIMARY KEY,
@@ -70,7 +89,7 @@ class HashCache:
                 )
                 """
             )
-            self.connection.execute(
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS content_hashes (
                     sha256 TEXT PRIMARY KEY,
@@ -81,11 +100,42 @@ class HashCache:
                 )
                 """
             )
-            self.connection.commit()
+            connection.commit()
+            self.validate_schema()
+
+    def require_connection(self) -> sqlite3.Connection:
+        if self.connection is None:
+            raise sqlite3.ProgrammingError("Hash cache is closed")
+        return self.connection
+
+    def validate_schema(self) -> None:
+        required_columns = {
+            "image_hashes": {
+                "path",
+                "size",
+                "mtime_ns",
+                "sha256",
+                "phash",
+                "dhash",
+                "version",
+                "updated_at",
+            },
+            "content_hashes": {"sha256", "phash", "dhash", "version", "updated_at"},
+        }
+        connection = self.require_connection()
+        for table_name, required in required_columns.items():
+            rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+            existing = {str(row[1]) for row in rows}
+            if not required.issubset(existing):
+                missing = ", ".join(sorted(required - existing))
+                raise sqlite3.DatabaseError(
+                    f"Incompatible hash cache schema: {table_name} missing {missing}"
+                )
 
     def load(self, record: ImageRecord) -> CachedHashes | None:
+        connection = self.require_connection()
         with self.lock:
-            row = self.connection.execute(
+            row = connection.execute(
                 """
                 SELECT size, mtime_ns, sha256, phash, dhash, version
                 FROM image_hashes
@@ -110,8 +160,9 @@ class HashCache:
         return cached
 
     def load_by_sha256(self, sha256: str) -> CachedHashes | None:
+        connection = self.require_connection()
         with self.lock:
-            row = self.connection.execute(
+            row = connection.execute(
                 """
                 SELECT phash, dhash, version
                 FROM content_hashes
@@ -134,6 +185,7 @@ class HashCache:
         phash: str | None = None,
         dhash: str | None = None,
     ) -> None:
+        connection = self.require_connection()
         with self.lock:
             existing = self.load(record)
             fingerprint = file_fingerprint(record.image_path)
@@ -143,7 +195,7 @@ class HashCache:
                 dhash=dhash if dhash is not None else existing.dhash if existing else None,
             )
             updated_at = datetime.now(UTC).isoformat()
-            self.connection.execute(
+            connection.execute(
                 """
                 INSERT INTO image_hashes (
                     path, size, mtime_ns, sha256, phash, dhash, version, updated_at
@@ -170,7 +222,7 @@ class HashCache:
                 ),
             )
             if values.sha256 and (values.phash or values.dhash):
-                self.connection.execute(
+                connection.execute(
                     """
                     INSERT INTO content_hashes (sha256, phash, dhash, version, updated_at)
                     VALUES (?, ?, ?, ?, ?)
@@ -188,7 +240,7 @@ class HashCache:
                         updated_at,
                     ),
                 )
-            self.connection.commit()
+            connection.commit()
 
     def cache_key(self, path: Path) -> str:
         return str(path.expanduser().resolve())
