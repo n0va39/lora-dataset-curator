@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lora-dataset-curator"
+version = "0.1.0"
+description = "Local GUI tool for curating LoRA training image and caption datasets"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "n0va39" }]
+dependencies = [
+  "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+gui = [
+  "PySide6>=6.7",
+]
+image = [
+  "ImageHash>=4.3",
+  "numpy>=1.26",
+  "scikit-image>=0.23",
+  "opencv-python>=4.9",
+]
+build = [
+  "pyinstaller>=6.0",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+lora-dataset-curator = "lora_dataset_curator.app:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
