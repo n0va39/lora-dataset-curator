@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from .models import ActionName, ActionPlan, FileMove, ImageRecord
+from .trash import make_trash_item_dir, write_trash_manifest
 
 
 def build_action_plan(
@@ -21,24 +22,27 @@ def build_action_plan(
 ) -> ActionPlan:
     """Build a safe plan for moving linked image/caption/metadata files.
 
-    `delete` is intentionally mapped to a quarantine-like target. Permanent deletion is not
+    `delete` is intentionally mapped to the app data trash. Permanent deletion is not
     performed by this helper.
     """
 
     output = Path(output_root).expanduser().resolve()
-    if target_bucket is None:
-        target_bucket = {
-            "keep": "keep",
-            "move": "selected",
-            "quarantine": "duplicate_quarantine",
-            "delete": "rejected",
-            "skip": "",
-        }[action]
-
     if action == "skip":
         return ActionPlan(action=action, moves=(), dry_run=dry_run, reason=reason)
 
-    target_dir = output / target_bucket
+    if action == "delete" and target_bucket is None:
+        target_dir = make_trash_item_dir(record)
+    else:
+        if target_bucket is None:
+            target_bucket = {
+                "keep": "keep",
+                "move": "",
+                "quarantine": "duplicate_quarantine",
+                "delete": "rejected",
+                "skip": "",
+            }[action]
+        target_dir = output / target_bucket
+
     moves = tuple(
         FileMove(source=path, target=target_dir / path.name) for path in record.linked_paths
     )
@@ -58,6 +62,7 @@ def execute_plan(
     if plan.dry_run:
         return list(plan.moves)
 
+    write_trash_manifest(plan)
     moves = list(plan.moves)
     if crop_rect is not None and moves and plan.action in {"keep", "move"}:
         image_move = moves[0]

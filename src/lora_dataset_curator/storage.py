@@ -23,6 +23,7 @@ class AppPaths:
     dataset_cache_dir: Path
     state_dir: Path
     decisions_dir: Path
+    trash_dir: Path
     logs_dir: Path
     settings_path: Path
     default_profile_path: Path
@@ -85,6 +86,7 @@ def app_paths() -> AppPaths:
     dataset_cache_dir = cache_dir / "datasets"
     state_dir = root / "state"
     decisions_dir = state_dir / "decisions"
+    trash_dir = root / "trash"
     logs_dir = root / "logs"
     return AppPaths(
         root=root,
@@ -94,6 +96,7 @@ def app_paths() -> AppPaths:
         dataset_cache_dir=dataset_cache_dir,
         state_dir=state_dir,
         decisions_dir=decisions_dir,
+        trash_dir=trash_dir,
         logs_dir=logs_dir,
         settings_path=config_dir / SETTINGS_FILE_NAME,
         default_profile_path=profiles_dir / f"{DEFAULT_PROFILE_NAME}.json",
@@ -110,6 +113,7 @@ def ensure_app_data_dirs() -> AppPaths:
         paths.dataset_cache_dir,
         paths.state_dir,
         paths.decisions_dir,
+        paths.trash_dir,
         paths.logs_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)

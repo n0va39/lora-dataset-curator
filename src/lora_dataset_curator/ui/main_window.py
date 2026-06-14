@@ -74,6 +74,7 @@ from lora_dataset_curator.storage import (
     load_settings,
     save_settings,
 )
+from lora_dataset_curator.trash import empty_trash, restore_trash
 
 ProgressCallback = Callable[[int, int, str], None]
 DECISION_LABELS = {"move": "이동", "delete": "삭제 예정", "skip": "보류"}
@@ -1098,6 +1099,16 @@ class MainWindow(QMainWindow):
         scan_action.triggered.connect(self.scan)
         file_menu.addAction(scan_action)
 
+        restore_trash_action = QAction("휴지통 복구", self)
+        restore_trash_action.triggered.connect(self.restore_trash_items)
+        file_menu.addAction(restore_trash_action)
+
+        empty_trash_action = QAction("휴지통 비우기", self)
+        empty_trash_action.triggered.connect(self.empty_trash_items)
+        file_menu.addAction(empty_trash_action)
+
+        file_menu.addSeparator()
+
         exit_action = QAction("종료", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -1116,6 +1127,31 @@ class MainWindow(QMainWindow):
         self.previous_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
         self.previous_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.previous_shortcut.activated.connect(lambda: self.select_relative_record(-1))
+
+    def restore_trash_items(self) -> None:
+        result = restore_trash()
+        message = (
+            f"휴지통 복구: {result.restored_files}개 복구, "
+            f"{result.skipped_files}개 건너뜀"
+        )
+        self.status_label.setText(message)
+        QMessageBox.information(self, "휴지통 복구", message)
+        input_root = Path(self.input_path.text()).expanduser()
+        if input_root.exists():
+            self.scan()
+
+    def empty_trash_items(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "휴지통 비우기",
+            "휴지통의 파일을 영구 삭제합니다. 계속할까요?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = empty_trash()
+        message = f"휴지통 비우기: {result.deleted_entries}개 항목 삭제"
+        self.status_label.setText(message)
+        QMessageBox.information(self, "휴지통 비우기", message)
 
     def apply_decision_shortcut(self, action: str) -> None:
         self.set_current_decision(action)

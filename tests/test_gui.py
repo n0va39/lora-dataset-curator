@@ -15,6 +15,7 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
 from lora_dataset_curator.storage import (  # noqa: E402
+    APP_HOME_ENV,
     ensure_app_data_dirs,
     load_settings,
     save_settings,
@@ -221,8 +222,8 @@ def test_execute_review_decisions_applies_crop_to_moved_image(tmp_path, monkeypa
 
     window.execute_review_decisions()
 
-    target_image = output_dir / "selected" / "a.png"
-    target_caption = output_dir / "selected" / "a.txt"
+    target_image = output_dir / "a.png"
+    target_caption = output_dir / "a.txt"
     assert app is not None
     assert not image_path.exists()
     assert target_caption.read_text(encoding="utf-8") == "caption"
@@ -590,7 +591,8 @@ def test_floating_preview_always_on_top_toggle(tmp_path):
     window.close()
 
 
-def test_execute_review_decisions_moves_linked_files(tmp_path, monkeypatch):
+def test_execute_review_decisions_moves_deleted_files_to_trash(tmp_path, monkeypatch):
+    monkeypatch.setenv(APP_HOME_ENV, str(tmp_path / "data"))
     image_path = tmp_path / "a.png"
     caption_path = tmp_path / "a.txt"
     Image.new("RGB", (16, 8), color="red").save(image_path)
@@ -612,8 +614,14 @@ def test_execute_review_decisions_moves_linked_files(tmp_path, monkeypatch):
     assert app is not None
     assert not image_path.exists()
     assert not caption_path.exists()
-    assert (output_dir / "rejected" / "a.png").exists()
-    assert (output_dir / "rejected" / "a.txt").exists()
+    paths = ensure_app_data_dirs()
+    assert list(paths.trash_dir.rglob("a.png"))
+    assert list(paths.trash_dir.rglob("a.txt"))
+
+    window.restore_trash_items()
+
+    assert image_path.exists()
+    assert caption_path.read_text(encoding="utf-8") == "caption"
 
     window.close()
 
