@@ -837,6 +837,7 @@ class MainWindow(QMainWindow):
         if self.background_tasks:
             phash_threshold = self.phash_threshold.value()
             dhash_threshold = self.dhash_threshold.value()
+            hash_cache_root = input_dir
             self.start_background_task(
                 lambda progress_callback: analyze_duplicates(
                     self.records,
@@ -844,6 +845,7 @@ class MainWindow(QMainWindow):
                     phash_threshold=phash_threshold,
                     dhash_threshold=dhash_threshold,
                     max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
+                    hash_cache_root=hash_cache_root,
                     progress_callback=progress_callback,
                 ),
                 self.finish_duplicate_analysis,
@@ -858,6 +860,7 @@ class MainWindow(QMainWindow):
                 phash_threshold=self.phash_threshold.value(),
                 dhash_threshold=self.dhash_threshold.value(),
                 max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
+                hash_cache_root=input_dir,
             )
         )
 

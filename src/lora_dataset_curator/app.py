@@ -43,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     duplicates_parser.add_argument("--phash-threshold", type=int, default=6)
     duplicates_parser.add_argument("--dhash-threshold", type=int, default=6)
     duplicates_parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Worker threads for hash calculation (default: CPU based)",
+    )
+    duplicates_parser.add_argument(
         "--max-perceptual-pairs",
         type=int,
         default=DEFAULT_MAX_PERCEPTUAL_PAIRS,
@@ -138,6 +144,8 @@ def handle_duplicates(args: argparse.Namespace) -> int:
             phash_threshold=args.phash_threshold,
             dhash_threshold=args.dhash_threshold,
             max_perceptual_pairs=args.max_perceptual_pairs,
+            max_workers=args.workers,
+            hash_cache_root=args.input_dir,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from None

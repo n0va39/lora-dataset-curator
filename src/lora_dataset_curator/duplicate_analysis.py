@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 
+from .cache import HashCache
 from .grouping import build_duplicate_groups
 from .hashing import compute_perceptual_hashes, compute_sha256
 from .models import DuplicateGroup, ImageRecord, SimilarityPair
@@ -13,6 +16,7 @@ from .similarity import build_hash_pair, is_duplicate_candidate, pair_key
 
 ProgressCallback = Callable[[int, int, str], None]
 DEFAULT_MAX_PERCEPTUAL_PAIRS = 500_000
+DEFAULT_MAX_WORKERS = min(8, (os.cpu_count() or 1) + 2)
 
 
 @dataclass(slots=True)
@@ -32,14 +36,55 @@ def analyze_duplicates(
     phash_threshold: int = 6,
     dhash_threshold: int = 6,
     max_perceptual_pairs: int = DEFAULT_MAX_PERCEPTUAL_PAIRS,
+    max_workers: int | None = None,
+    hash_cache_root: Path | str | None = None,
     progress_callback: ProgressCallback | None = None,
+) -> DuplicateAnalysisResult:
+    hash_cache = HashCache(hash_cache_root) if hash_cache_root is not None else None
+    try:
+        return analyze_duplicates_with_cache(
+            records,
+            use_sha256=use_sha256,
+            use_metadata=use_metadata,
+            use_perceptual=use_perceptual,
+            phash_threshold=phash_threshold,
+            dhash_threshold=dhash_threshold,
+            max_perceptual_pairs=max_perceptual_pairs,
+            max_workers=max_workers,
+            hash_cache=hash_cache,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if hash_cache is not None:
+            hash_cache.close()
+
+
+def analyze_duplicates_with_cache(
+    records: list[ImageRecord],
+    *,
+    use_sha256: bool,
+    use_metadata: bool,
+    use_perceptual: bool,
+    phash_threshold: int,
+    dhash_threshold: int,
+    max_perceptual_pairs: int,
+    max_workers: int | None,
+    hash_cache: HashCache | None,
+    progress_callback: ProgressCallback | None,
 ) -> DuplicateAnalysisResult:
     pair_map: dict[tuple[str, str], SimilarityPair] = {}
     progress = AnalysisProgress(records, use_sha256=use_sha256, use_perceptual=use_perceptual)
     progress.emit(progress_callback, "중복 분석을 시작했습니다.")
 
     if use_sha256:
-        add_sha256_pairs(pair_map, records, progress=progress, progress_callback=progress_callback)
+        add_sha256_pairs(
+            pair_map,
+            records,
+            max_workers=max_workers,
+            hash_cache=hash_cache,
+            progress=progress,
+            progress_callback=progress_callback,
+        )
 
     if use_metadata:
         progress.emit(progress_callback, "metadata 기준 후보를 묶는 중입니다.")
@@ -66,6 +111,8 @@ def analyze_duplicates(
             phash_threshold=phash_threshold,
             dhash_threshold=dhash_threshold,
             max_candidate_pairs=max_perceptual_pairs,
+            max_workers=max_workers,
+            hash_cache=hash_cache,
             progress=progress,
             progress_callback=progress_callback,
         )
@@ -140,6 +187,8 @@ def add_sha256_pairs(
     pair_map: dict[tuple[str, str], SimilarityPair],
     records: Iterable[ImageRecord],
     *,
+    max_workers: int | None = None,
+    hash_cache: HashCache | None = None,
     progress: AnalysisProgress | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
@@ -148,7 +197,13 @@ def add_sha256_pairs(
         for bucket in file_size_buckets(records).values()
         for record in bucket
     ]
-    attach_sha256(candidates, progress=progress, progress_callback=progress_callback)
+    attach_sha256(
+        candidates,
+        max_workers=max_workers,
+        hash_cache=hash_cache,
+        progress=progress,
+        progress_callback=progress_callback,
+    )
     add_bucket_pairs(
         pair_map,
         bucket_records(candidates, lambda record: record.sha256),
@@ -159,14 +214,52 @@ def add_sha256_pairs(
 def attach_sha256(
     records: Iterable[ImageRecord],
     *,
+    max_workers: int | None = None,
+    hash_cache: HashCache | None = None,
     progress: AnalysisProgress | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
+    pending_records: list[ImageRecord] = []
     for record in records:
         if record.sha256 is None:
-            record.sha256 = compute_sha256(record.image_path)
-        if progress is not None:
+            cached = hash_cache.load(record) if hash_cache is not None else None
+            if cached is not None and cached.sha256:
+                record.sha256 = cached.sha256
+                if progress is not None:
+                    progress.advance(
+                        progress_callback,
+                        f"SHA256 캐시 사용: {record.image_path.name}",
+                    )
+                continue
+            pending_records.append(record)
+        elif progress is not None:
             progress.advance(progress_callback, f"SHA256 계산 중: {record.image_path.name}")
+
+    if not pending_records:
+        return
+
+    worker_count = resolve_max_workers(max_workers)
+    if worker_count <= 1 or len(pending_records) == 1:
+        for record in pending_records:
+            record.sha256 = compute_sha256(record.image_path)
+            if hash_cache is not None:
+                hash_cache.save(record, sha256=record.sha256)
+            if progress is not None:
+                progress.advance(progress_callback, f"SHA256 계산 중: {record.image_path.name}")
+        return
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(compute_sha256, record.image_path): record
+            for record in pending_records
+        }
+        for future in as_completed(futures):
+            record = futures[future]
+            record.sha256 = future.result()
+            if hash_cache is not None:
+                hash_cache.save(record, sha256=record.sha256)
+            if progress is not None:
+                progress.advance(progress_callback, f"SHA256 계산 중: {record.image_path.name}")
 
 
 def bucket_records(
@@ -206,21 +299,18 @@ def add_perceptual_pairs(
     phash_threshold: int,
     dhash_threshold: int,
     max_candidate_pairs: int,
+    max_workers: int | None = None,
+    hash_cache: HashCache | None = None,
     progress: AnalysisProgress | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
-    hashes: dict[Path, dict[str, str]] = {}
-    for record in records:
-        try:
-            hashes[record.image_path] = compute_perceptual_hashes(record.image_path)
-        except (OSError, RuntimeError, ValueError):
-            continue
-        finally:
-            if progress is not None:
-                progress.advance(
-                    progress_callback,
-                    f"pHash/dHash 계산 중: {record.image_path.name}",
-                )
+    hashes = compute_perceptual_hash_map(
+        records,
+        max_workers=max_workers,
+        hash_cache=hash_cache,
+        progress=progress,
+        progress_callback=progress_callback,
+    )
 
     candidate_pairs = build_perceptual_candidate_pairs(
         records,
@@ -269,6 +359,120 @@ def add_perceptual_pairs(
                 progress_callback,
                 f"pHash/dHash 후보 비교 중: {record_a.image_path.name}",
             )
+
+
+def compute_perceptual_hash_map(
+    records: list[ImageRecord],
+    *,
+    max_workers: int | None = None,
+    hash_cache: HashCache | None = None,
+    progress: AnalysisProgress | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[Path, dict[str, str]]:
+    cached_hashes, pending_records = load_cached_perceptual_hashes(
+        records,
+        hash_cache=hash_cache,
+        progress=progress,
+        progress_callback=progress_callback,
+    )
+    if not pending_records:
+        return cached_hashes
+
+    worker_count = resolve_max_workers(max_workers)
+    if worker_count <= 1 or len(pending_records) <= 1:
+        cached_hashes.update(
+            compute_perceptual_hash_map_serial(
+                pending_records,
+                hash_cache=hash_cache,
+                progress=progress,
+                progress_callback=progress_callback,
+            )
+        )
+        return cached_hashes
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(compute_perceptual_hashes, record.image_path): record
+            for record in pending_records
+        }
+        for future in as_completed(futures):
+            record = futures[future]
+            try:
+                record_hashes = future.result()
+                cached_hashes[record.image_path] = record_hashes
+                if hash_cache is not None:
+                    hash_cache.save(
+                        record,
+                        phash=record_hashes.get("phash"),
+                        dhash=record_hashes.get("dhash"),
+                    )
+            except (OSError, RuntimeError, ValueError):
+                pass
+            finally:
+                if progress is not None:
+                    progress.advance(
+                        progress_callback,
+                        f"pHash/dHash 계산 중: {record.image_path.name}",
+                    )
+    return cached_hashes
+
+
+def load_cached_perceptual_hashes(
+    records: list[ImageRecord],
+    *,
+    hash_cache: HashCache | None = None,
+    progress: AnalysisProgress | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[dict[Path, dict[str, str]], list[ImageRecord]]:
+    hashes: dict[Path, dict[str, str]] = {}
+    pending_records: list[ImageRecord] = []
+    for record in records:
+        cached = hash_cache.load(record) if hash_cache is not None else None
+        if cached is not None and cached.phash and cached.dhash:
+            hashes[record.image_path] = {"phash": cached.phash, "dhash": cached.dhash}
+            if progress is not None:
+                progress.advance(
+                    progress_callback,
+                    f"pHash/dHash 캐시 사용: {record.image_path.name}",
+                )
+            continue
+        pending_records.append(record)
+    return hashes, pending_records
+
+
+def compute_perceptual_hash_map_serial(
+    records: list[ImageRecord],
+    *,
+    hash_cache: HashCache | None = None,
+    progress: AnalysisProgress | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[Path, dict[str, str]]:
+    hashes: dict[Path, dict[str, str]] = {}
+    for record in records:
+        try:
+            record_hashes = compute_perceptual_hashes(record.image_path)
+            hashes[record.image_path] = record_hashes
+            if hash_cache is not None:
+                hash_cache.save(
+                    record,
+                    phash=record_hashes.get("phash"),
+                    dhash=record_hashes.get("dhash"),
+                )
+        except (OSError, RuntimeError, ValueError):
+            continue
+        finally:
+            if progress is not None:
+                progress.advance(
+                    progress_callback,
+                    f"pHash/dHash 계산 중: {record.image_path.name}",
+                )
+    return hashes
+
+
+def resolve_max_workers(max_workers: int | None) -> int:
+    if max_workers is None:
+        return DEFAULT_MAX_WORKERS
+    return max(max_workers, 1)
 
 
 def build_perceptual_candidate_pairs(

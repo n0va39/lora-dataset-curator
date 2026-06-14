@@ -127,3 +127,44 @@ def test_analyze_duplicates_groups_perceptual_bucket_candidates(tmp_path, monkey
 
     assert len(result.groups) == 1
     assert {record.image_path.name for record in result.groups[0].images} == {"a.png", "b.png"}
+
+
+def test_analyze_duplicates_reuses_perceptual_hash_cache(tmp_path, monkeypatch):
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (8, 8), color="red").save(tmp_path / name)
+
+    call_count = 0
+
+    def fake_perceptual_hashes(path):
+        nonlocal call_count
+        call_count += 1
+        return {"phash": "0000000000000000", "dhash": "0000000000000000"}
+
+    monkeypatch.setattr(duplicate_analysis, "compute_perceptual_hashes", fake_perceptual_hashes)
+    records = scan_dataset(tmp_path)
+    result = analyze_duplicates(
+        records,
+        use_sha256=False,
+        use_metadata=False,
+        use_perceptual=True,
+        hash_cache_root=tmp_path,
+    )
+
+    assert len(result.groups) == 1
+    assert call_count == 2
+    assert (tmp_path / ".lora_dataset_curator" / "hashes.sqlite").exists()
+
+    def fail_perceptual_hashes(path):
+        raise AssertionError("hash cache was not used")
+
+    monkeypatch.setattr(duplicate_analysis, "compute_perceptual_hashes", fail_perceptual_hashes)
+    cached_records = scan_dataset(tmp_path)
+    cached_result = analyze_duplicates(
+        cached_records,
+        use_sha256=False,
+        use_metadata=False,
+        use_perceptual=True,
+        hash_cache_root=tmp_path,
+    )
+
+    assert len(cached_result.groups) == 1

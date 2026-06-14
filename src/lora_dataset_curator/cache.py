@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +12,8 @@ from .models import DuplicateGroup, ImageRecord, SimilarityPair
 CACHE_DIR_NAME = ".lora_dataset_curator"
 DECISIONS_FILE_NAME = "decisions.json"
 DUPLICATE_GROUPS_FILE_NAME = "duplicate_groups.json"
+HASHES_FILE_NAME = "hashes.sqlite"
+HASH_CACHE_VERSION = 1
 
 
 def cache_dir(output_root: Path | str) -> Path:
@@ -21,6 +26,121 @@ def decisions_path(output_root: Path | str) -> Path:
 
 def duplicate_groups_path(output_root: Path | str) -> Path:
     return cache_dir(output_root) / DUPLICATE_GROUPS_FILE_NAME
+
+
+def hashes_path(input_root: Path | str) -> Path:
+    return cache_dir(input_root) / HASHES_FILE_NAME
+
+
+@dataclass(slots=True)
+class CachedHashes:
+    sha256: str | None = None
+    phash: str | None = None
+    dhash: str | None = None
+
+
+class HashCache:
+    def __init__(self, input_root: Path | str) -> None:
+        self.root = Path(input_root).expanduser().resolve()
+        self.path = hashes_path(self.root)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(self.path)
+        self.ensure_schema()
+
+    def __enter__(self) -> HashCache:
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def ensure_schema(self) -> None:
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS image_hashes (
+                path TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                sha256 TEXT,
+                phash TEXT,
+                dhash TEXT,
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.commit()
+
+    def load(self, record: ImageRecord) -> CachedHashes | None:
+        row = self.connection.execute(
+            """
+            SELECT size, mtime_ns, sha256, phash, dhash, version
+            FROM image_hashes
+            WHERE path = ?
+            """,
+            (self.cache_key(record.image_path),),
+        ).fetchone()
+        if row is None:
+            return None
+        size, mtime_ns, sha256, phash, dhash, version = row
+        if version != HASH_CACHE_VERSION:
+            return None
+        fingerprint = file_fingerprint(record.image_path)
+        if size != fingerprint["size"] or mtime_ns != fingerprint["mtime_ns"]:
+            return None
+        return CachedHashes(sha256=sha256, phash=phash, dhash=dhash)
+
+    def save(
+        self,
+        record: ImageRecord,
+        *,
+        sha256: str | None = None,
+        phash: str | None = None,
+        dhash: str | None = None,
+    ) -> None:
+        existing = self.load(record)
+        fingerprint = file_fingerprint(record.image_path)
+        values = CachedHashes(
+            sha256=sha256 if sha256 is not None else existing.sha256 if existing else None,
+            phash=phash if phash is not None else existing.phash if existing else None,
+            dhash=dhash if dhash is not None else existing.dhash if existing else None,
+        )
+        self.connection.execute(
+            """
+            INSERT INTO image_hashes (
+                path, size, mtime_ns, sha256, phash, dhash, version, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                size = excluded.size,
+                mtime_ns = excluded.mtime_ns,
+                sha256 = excluded.sha256,
+                phash = excluded.phash,
+                dhash = excluded.dhash,
+                version = excluded.version,
+                updated_at = excluded.updated_at
+            """,
+            (
+                self.cache_key(record.image_path),
+                fingerprint["size"],
+                fingerprint["mtime_ns"],
+                values.sha256,
+                values.phash,
+                values.dhash,
+                HASH_CACHE_VERSION,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self.connection.commit()
+
+    def cache_key(self, path: Path) -> str:
+        resolved = path.expanduser().resolve()
+        try:
+            return resolved.relative_to(self.root).as_posix()
+        except ValueError:
+            return str(resolved)
 
 
 def load_decisions(output_root: Path | str) -> dict[str, str]:
