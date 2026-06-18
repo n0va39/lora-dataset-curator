@@ -33,6 +33,7 @@ try {
   Copy-Item $ExePath (Join-Path $PackageRoot "LoRA-Dataset-Curator.exe")
   Copy-Item "README.md" (Join-Path $PackageRoot "README.md")
   Copy-Item "RELEASE.md" (Join-Path $PackageRoot "RELEASE.md")
+  Copy-Item "THIRD_PARTY_NOTICES.md" (Join-Path $PackageRoot "THIRD_PARTY_NOTICES.md")
   Copy-Item "docs\USER_GUIDE.md" (Join-Path $PackageRoot "docs\USER_GUIDE.md")
   Copy-Item "docs\BUILD_DISTRIBUTION.md" (Join-Path $PackageRoot "docs\BUILD_DISTRIBUTION.md")
 

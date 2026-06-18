@@ -85,6 +85,51 @@ uv run lora-dataset-curator paths
 
 `pHash/dHash 사용`은 기본으로 켜져 있습니다. 이미지가 많은 데이터셋은 최초 분석 시간이 걸릴 수 있습니다. 이후에는 `data/cache`에 저장된 해시와 그룹 캐시를 사용합니다.
 
+## Anima LoRA PE 유사도 분석
+
+Anima LoRA가 별도로 설치되어 있으면 PE-Spatial grid matching 기반 유사 이미지 분석을 사용할 수 있습니다. 이 방식은 전체 이미지 해시만 비교하는 pHash/dHash보다 crop, 부분 편집, 작은 영역 차이에 더 강합니다.
+
+전제 조건:
+
+- Anima LoRA가 로컬에 설치되어 있어야 한다.
+- Anima LoRA의 `.venv`가 유효해야 한다.
+- Anima LoRA 쪽 PE-Spatial 모델/의존성이 준비되어 있어야 한다.
+
+예시 `.venv` 경로:
+
+```text
+D:\ComfyUI\Anima_Lora_work\anima_lora_gui\.venv
+```
+
+사용 순서:
+
+1. `스캔`을 먼저 실행한다.
+2. `중복 그룹` 탭에서 `Anima venv`를 누른다.
+3. Anima LoRA 설치 폴더 안의 `.venv` 폴더를 선택한다.
+4. 경로가 유효하면 `Anima 임베딩 분석` 버튼이 활성화된다.
+5. 필요하면 기준값을 조정한다.
+6. `Anima 임베딩 분석`을 누른다.
+
+기준값:
+
+- `cell`: grid cell 하나가 매칭되었다고 볼 cosine 기준. 기본값은 `0.93`이며, 높을수록 엄격하다.
+- `match`: 전체 grid cell 중 매칭되어야 하는 비율. 기본값은 `0.25`이며, 높을수록 엄격하다.
+- `device`: Anima LoRA 실행 장치. 일반적으로 `cuda`, 테스트나 GPU가 없는 환경에서는 `cpu`.
+
+동작 방식:
+
+- LoRA Dataset Curator는 Anima LoRA를 포함하지 않는다.
+- 지정된 `.venv`의 Python으로 Anima LoRA의 `scripts/curate/build_groups.py`를 외부 프로세스로 실행한다.
+- 결과 JSON을 읽어 현재 중복 그룹 탭에 `E0001` 형식의 그룹으로 표시한다.
+- PE-Spatial feature cache는 앱 data의 `cache/anima_near_twin/` 아래에 저장된다.
+
+라이선스:
+
+- Anima LoRA source code는 upstream 기준 MIT License이다.
+- Anima LoRA는 일부 Apache License 2.0 코드 유래 사항과 별도 NOTICE를 포함한다.
+- Anima/CircleStone 모델 가중치와 그 파생물에는 별도의 non-commercial 모델 라이선스가 적용될 수 있다.
+- 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 확인한다.
+
 ## 추천 점수
 
 그룹 안에서는 보존 우선순위가 높은 이미지가 먼저 표시됩니다.
