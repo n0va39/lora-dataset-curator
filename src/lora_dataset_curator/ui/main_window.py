@@ -66,7 +66,7 @@ from lora_dataset_curator.duplicate_analysis import (
     prepare_hash_cache,
 )
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
-from lora_dataset_curator.models import DuplicateGroup, ImageRecord
+from lora_dataset_curator.models import ActionPlan, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
 from lora_dataset_curator.storage import (
     clear_cache,
@@ -1688,7 +1688,7 @@ class MainWindow(QMainWindow):
             self,
             "결정 실행",
             f"{len(actionable)}개 이미지와 연결된 sidecar 파일을 출력 폴더로 이동합니다.\n"
-            "삭제 예정은 실제 삭제가 아니라 rejected 폴더로 이동합니다.\n"
+            "삭제 예정은 실제 삭제가 아니라 앱 data 휴지통으로 이동합니다.\n"
             "계속할까요?",
         )
         if confirm != QMessageBox.StandardButton.Yes:
@@ -1696,6 +1696,7 @@ class MainWindow(QMainWindow):
 
         log_path = self.output_root() / "action_log.csv"
         moved_count = 0
+        failed_count = 0
         for record in actionable:
             action = self.review_decisions.get(str(record.image_path))
             if action not in {"move", "delete"}:
@@ -1706,12 +1707,40 @@ class MainWindow(QMainWindow):
                 if action == "move"
                 else None
             )
-            execute_plan(plan, crop_rect=crop_rect)
-            append_action_log(log_path, record, plan)
-            moved_count += 1
+            try:
+                executed_moves = execute_plan(plan, crop_rect=crop_rect)
+                append_action_log(
+                    log_path,
+                    record,
+                    ActionPlan(
+                        action=plan.action,
+                        moves=tuple(executed_moves),
+                        dry_run=plan.dry_run,
+                        reason=plan.reason,
+                    ),
+                )
+                moved_count += 1
+            except Exception as exc:  # noqa: BLE001
+                failed_count += 1
+                append_action_log(
+                    log_path,
+                    record,
+                    ActionPlan(
+                        action=plan.action,
+                        moves=(),
+                        dry_run=plan.dry_run,
+                        reason=f"failed: {exc}",
+                    ),
+                )
 
         save_decisions(self.output_root(), self.review_decisions)
-        QMessageBox.information(self, "실행 완료", f"{moved_count}개 이미지 결정을 실행했습니다.")
+        message = f"{moved_count}개 이미지 결정을 실행했습니다."
+        if failed_count:
+            message += (
+                f"\n{failed_count}개 항목은 오류로 건너뛰었습니다. "
+                "action_log.csv를 확인하세요."
+            )
+        QMessageBox.information(self, "실행 완료", message)
         self.scan()
 
     def prepare_duplicate_cache(self) -> None:

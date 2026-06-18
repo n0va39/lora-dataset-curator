@@ -655,6 +655,39 @@ def test_execute_review_decisions_moves_deleted_files_to_trash(tmp_path, monkeyp
     window.close()
 
 
+def test_execute_review_decisions_handles_move_errors(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (16, 8), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.set_current_decision("move")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    messages: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda *args, **kwargs: messages.append(str(args[2])),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "execute_plan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("manual move conflict")),
+    )
+
+    window.execute_review_decisions()
+
+    assert app is not None
+    assert image_path.exists()
+    assert any("오류로 건너뛰었습니다" in message for message in messages)
+
+    window.close()
+
+
 def test_progress_bar_stays_visible_on_duplicate_tab(tmp_path):
     Image.new("RGB", (16, 8)).save(tmp_path / "sample.png")
 

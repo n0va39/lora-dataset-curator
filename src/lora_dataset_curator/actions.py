@@ -62,7 +62,8 @@ def execute_plan(
     if plan.dry_run:
         return list(plan.moves)
 
-    moves = list(plan.moves)
+    moves = retarget_conflicting_moves(list(plan.moves))
+    executed_moves: list[FileMove] = []
     if plan.action == "delete":
         existing_moves = tuple(move for move in moves if move.source.exists())
         write_trash_manifest(
@@ -75,17 +76,69 @@ def execute_plan(
         )
     if crop_rect is not None and moves and plan.action in {"keep", "move"}:
         image_move = moves[0]
-        if image_move.source.exists() and should_crop_image(image_move.source, crop_rect):
+        if (
+            image_move.source.exists()
+            and not same_path(image_move.source, image_move.target)
+            and should_crop_image(image_move.source, crop_rect)
+        ):
             apply_crop_to_image(image_move.source, image_move.target, crop_rect)
             image_move.source.unlink()
+            executed_moves.append(image_move)
             moves = moves[1:]
 
     for move in moves:
         if not move.source.exists():
             continue
+        if same_path(move.source, move.target):
+            continue
         move.target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(move.source), str(move.target))
-    return list(plan.moves)
+        executed_moves.append(move)
+    return executed_moves
+
+
+def retarget_conflicting_moves(moves: list[FileMove]) -> list[FileMove]:
+    if not needs_conflict_suffix(moves):
+        return moves
+    for index in range(1, 10_000):
+        candidate_moves = [
+            FileMove(
+                source=move.source,
+                target=move.target.with_name(f"{move.target.stem}_{index}{move.target.suffix}"),
+            )
+            for move in moves
+        ]
+        if not needs_conflict_suffix(candidate_moves):
+            return candidate_moves
+    raise FileExistsError("Could not find available target names for file move plan.")
+
+
+def needs_conflict_suffix(moves: list[FileMove]) -> bool:
+    active_moves = [
+        move
+        for move in moves
+        if move.source.exists() and not same_path(move.source, move.target)
+    ]
+    seen_targets: set[Path] = set()
+    for move in active_moves:
+        target_key = normalized_path(move.target)
+        if target_key in seen_targets:
+            return True
+        seen_targets.add(target_key)
+        if move.target.exists():
+            return True
+    return False
+
+
+def same_path(left: Path, right: Path) -> bool:
+    return normalized_path(left) == normalized_path(right)
+
+
+def normalized_path(path: Path) -> Path:
+    try:
+        return path.expanduser().resolve()
+    except OSError:
+        return path.expanduser().absolute()
 
 
 def should_crop_image(source: Path, crop_rect: tuple[int, int, int, int]) -> bool:
