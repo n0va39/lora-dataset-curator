@@ -47,6 +47,19 @@ DEFAULT_PROFILE: dict[str, Any] = {
         "dhash_threshold": 6,
         "max_perceptual_pairs": 500_000,
     },
+    "embedding": {
+        "anima_root": "",
+        "anima_venv": "",
+        "cell_match_min": 0.93,
+        "match_frac_min": 0.25,
+        "sim_min": 0.5,
+        "grid": 7,
+        "ratio": 0.8,
+        "min_size": 2,
+        "device": "cuda",
+        "batch_size": 16,
+        "num_workers": 4,
+    },
     "actions": {
         "delete_mode": "quarantine",
         "move_linked_sidecars": True,
@@ -164,6 +177,10 @@ def load_default_profile() -> dict[str, Any]:
     if loaded_version < 2:
         duplicates["use_perceptual"] = True
     profile["duplicates"] = duplicates
+    loaded_embedding = loaded.get("embedding", {})
+    if not isinstance(loaded_embedding, dict):
+        loaded_embedding = {}
+    profile["embedding"] = DEFAULT_PROFILE["embedding"] | loaded_embedding
     return profile
 
 
@@ -181,6 +198,14 @@ def save_default_profile(updates: dict[str, Any]) -> None:
     merged["duplicates"] = (
         DEFAULT_PROFILE["duplicates"] | current_duplicates | update_duplicates
     )
+
+    current_embedding = current.get("embedding", {})
+    update_embedding = updates.get("embedding", {})
+    if not isinstance(current_embedding, dict):
+        current_embedding = {}
+    if not isinstance(update_embedding, dict):
+        update_embedding = {}
+    merged["embedding"] = DEFAULT_PROFILE["embedding"] | current_embedding | update_embedding
 
     current_actions = current.get("actions", {})
     update_actions = updates.get("actions", {})

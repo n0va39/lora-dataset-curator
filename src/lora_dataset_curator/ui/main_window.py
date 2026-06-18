@@ -73,6 +73,12 @@ from lora_dataset_curator.error_log import (
     native_crash_log_path,
     read_error_log,
 )
+from lora_dataset_curator.external_embedding import (
+    AnimaEmbeddingSettings,
+    detect_anima_venv,
+    is_valid_anima_venv,
+    run_anima_embedding_grouping,
+)
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
 from lora_dataset_curator.models import ActionPlan, DuplicateGroup, ImageRecord
 from lora_dataset_curator.scanner import scan_dataset
@@ -816,6 +822,28 @@ class MainWindow(QMainWindow):
         self.use_perceptual_checkbox.toggled.connect(self.save_duplicate_settings)
         self.phash_threshold.valueChanged.connect(self.save_duplicate_settings)
         self.dhash_threshold.valueChanged.connect(self.save_duplicate_settings)
+        embedding_settings = self.profile.get("embedding", {})
+        if not isinstance(embedding_settings, dict):
+            embedding_settings = {}
+        detected_anima_venv = detect_anima_venv()
+        anima_venv = str(
+            embedding_settings.get("anima_venv")
+            or embedding_settings.get("anima_root")
+            and Path(str(embedding_settings.get("anima_root"))) / ".venv"
+            or (detected_anima_venv if detected_anima_venv is not None else "")
+        )
+        self.anima_venv_path = QLineEdit(anima_venv)
+        self.anima_venv_path.editingFinished.connect(self.save_embedding_settings)
+        self.anima_venv_path.textChanged.connect(self.refresh_embedding_controls)
+        self.embedding_cell_match = self.create_embedding_ratio_spinbox(
+            float(embedding_settings.get("cell_match_min", 0.93))
+        )
+        self.embedding_match_frac = self.create_embedding_ratio_spinbox(
+            float(embedding_settings.get("match_frac_min", 0.25))
+        )
+        self.embedding_device = QLineEdit(str(embedding_settings.get("device", "cuda")))
+        self.embedding_device.setMaximumWidth(80)
+        self.embedding_device.editingFinished.connect(self.save_embedding_settings)
 
         self.group_table = QTableWidget(0, 5)
         self.group_table.setHorizontalHeaderLabels(
@@ -846,6 +874,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.build_layout())
         self.create_menu()
         self.create_shortcuts()
+        self.refresh_embedding_controls()
 
         if input_dir is not None:
             self.scan()
@@ -869,6 +898,15 @@ class MainWindow(QMainWindow):
         spinbox.setDecimals(1)
         spinbox.setSingleStep(0.5)
         spinbox.setSuffix("%")
+        return spinbox
+
+    def create_embedding_ratio_spinbox(self, value: float) -> QDoubleSpinBox:
+        spinbox = QDoubleSpinBox()
+        spinbox.setRange(0.0, 1.0)
+        spinbox.setDecimals(2)
+        spinbox.setSingleStep(0.01)
+        spinbox.setValue(value)
+        spinbox.valueChanged.connect(self.save_embedding_settings)
         return spinbox
 
     def save_current_paths(self) -> None:
@@ -895,6 +933,37 @@ class MainWindow(QMainWindow):
             }
         )
         self.profile = load_default_profile()
+
+    def save_embedding_settings(self, *_args: object) -> None:
+        save_default_profile(
+            {
+                "embedding": {
+                    "anima_venv": self.anima_venv_path.text().strip(),
+                    "cell_match_min": self.embedding_cell_match.value(),
+                    "match_frac_min": self.embedding_match_frac.value(),
+                    "device": self.embedding_device.text().strip() or "cuda",
+                }
+            }
+        )
+        self.profile = load_default_profile()
+        self.refresh_embedding_controls()
+
+    def embedding_available(self) -> bool:
+        text = self.anima_venv_path.text().strip()
+        return bool(text) and is_valid_anima_venv(Path(text))
+
+    def refresh_embedding_controls(self) -> None:
+        if not hasattr(self, "embedding_analyze_button"):
+            return
+        available = self.embedding_available()
+        self.embedding_analyze_button.setEnabled(
+            available and self.active_thread is None
+        )
+        self.embedding_analyze_button.setToolTip(
+            ""
+            if available
+            else "유효한 Anima LoRA .venv 폴더를 지정해야 사용할 수 있습니다."
+        )
 
     @staticmethod
     def configure_interactive_header(table: QTableWidget, widths: list[int]) -> None:
@@ -1036,12 +1105,17 @@ class MainWindow(QMainWindow):
         self.analyze_button.clicked.connect(self.analyze_duplicate_groups)
         self.prepare_cache_button = QPushButton("캐시 준비")
         self.prepare_cache_button.clicked.connect(self.prepare_duplicate_cache)
+        self.embedding_analyze_button = QPushButton("Anima 임베딩 분석")
+        self.embedding_analyze_button.clicked.connect(self.analyze_embedding_groups)
+        anima_venv_button = QPushButton("Anima venv")
+        anima_venv_button.clicked.connect(self.choose_anima_venv)
         self.apply_recommendations_button = QPushButton("추천/비중복 이동 등록")
         self.apply_recommendations_button.clicked.connect(self.apply_recommended_decisions)
 
         controls_widget = QWidget()
+        controls_layout = QVBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
         controls = QHBoxLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
         controls.addWidget(self.analyze_button)
         controls.addWidget(self.prepare_cache_button)
         controls.addWidget(self.apply_recommendations_button)
@@ -1052,13 +1126,27 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.dhash_threshold)
         controls.addWidget(self.duplicate_summary_label)
         controls.addStretch()
-        controls_widget.setLayout(controls)
+        embedding_controls = QHBoxLayout()
+        embedding_controls.addWidget(self.embedding_analyze_button)
+        embedding_controls.addWidget(anima_venv_button)
+        embedding_controls.addWidget(self.anima_venv_path, stretch=1)
+        embedding_controls.addWidget(QLabel("cell"))
+        embedding_controls.addWidget(self.embedding_cell_match)
+        embedding_controls.addWidget(QLabel("match"))
+        embedding_controls.addWidget(self.embedding_match_frac)
+        embedding_controls.addWidget(QLabel("device"))
+        embedding_controls.addWidget(self.embedding_device)
+        controls_layout.addLayout(controls)
+        controls_layout.addLayout(embedding_controls)
+        controls_widget.setLayout(controls_layout)
 
         self.duplicate_guide_label = QLabel(
             "분석 팁: pHash/dHash 기준값은 해시 거리입니다. 0은 거의 완전 동일, "
             "값이 클수록 더 느슨하게 유사 이미지를 묶습니다. 권장 시작값은 4-8, "
             "강한 압축/리사이즈 후보까지 보려면 10-12, 15 초과는 지원하지 않습니다. "
-            "캐시 준비는 해시를 미리 계산하지만, 일반적으로 바로 분석을 눌러도 됩니다."
+            "캐시 준비는 해시를 미리 계산하지만, 일반적으로 바로 분석을 눌러도 됩니다. "
+            "Anima 임베딩 분석은 설치된 anima_lora의 PE-Spatial grid matching을 외부 "
+            "프로세스로 호출해 크롭/부분 편집 후보를 더 잘 찾습니다."
         )
         self.duplicate_guide_label.setWordWrap(True)
         self.duplicate_guide_label.setStyleSheet(
@@ -1302,6 +1390,16 @@ class MainWindow(QMainWindow):
             self.save_current_paths()
             self.crop_rects = load_crop_settings(self.output_root())
             self.sync_crop_controls(self.current_record)
+
+    def choose_anima_venv(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Anima LoRA .venv 폴더 선택",
+            self.anima_venv_path.text(),
+        )
+        if path:
+            self.anima_venv_path.setText(QDir.toNativeSeparators(path))
+            self.save_embedding_settings()
 
     def scan(self) -> None:
         input_dir = Path(self.input_path.text()).expanduser()
@@ -1911,11 +2009,62 @@ class MainWindow(QMainWindow):
             "중복 분석을 시작했습니다.",
         )
 
+    def analyze_embedding_groups(self) -> None:
+        if not self.records:
+            QMessageBox.information(self, "Anima 임베딩 분석", "먼저 데이터셋을 스캔하세요.")
+            return
+        if not self.embedding_available():
+            QMessageBox.warning(
+                self,
+                "Anima 임베딩 분석",
+                "유효한 Anima LoRA .venv 폴더를 지정하세요.",
+            )
+            return
+
+        try:
+            settings = self.current_anima_embedding_settings()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Anima 임베딩 분석", str(exc))
+            return
+
+        input_dir = Path(self.input_path.text()).expanduser()
+        self.save_embedding_settings()
+
+        def task(progress_callback: ProgressCallback) -> DuplicateAnalysisResult:
+            return run_anima_embedding_grouping(
+                self.records,
+                input_dir,
+                settings,
+                progress_callback=progress_callback,
+            )
+
+        if self.background_tasks:
+            self.start_background_task(
+                task,
+                self.finish_embedding_analysis,
+                "Anima 임베딩 그룹 분석을 시작했습니다.",
+            )
+            return
+        self.run_foreground_task(
+            task,
+            self.finish_embedding_analysis,
+            "Anima 임베딩 그룹 분석을 시작했습니다.",
+        )
+
+    def current_anima_embedding_settings(self) -> AnimaEmbeddingSettings:
+        anima_venv_text = self.anima_venv_path.text().strip()
+        if not anima_venv_text:
+            raise ValueError("Anima LoRA .venv 폴더를 설정하세요.")
+        anima_venv = Path(anima_venv_text).expanduser()
+        return AnimaEmbeddingSettings(
+            anima_venv=anima_venv,
+            cell_match_min=self.embedding_cell_match.value(),
+            match_frac_min=self.embedding_match_frac.value(),
+            device=self.embedding_device.text().strip() or "cuda",
+        )
+
     def finish_duplicate_analysis(self, result: DuplicateAnalysisResult) -> None:
-        self.duplicate_result = result
-        self.sort_records_by_duplicate_groups()
-        self.populate_table()
-        self.populate_group_table()
+        self.apply_duplicate_result(result)
         if self.records:
             save_duplicate_result(
                 self.output_root(),
@@ -1926,6 +2075,15 @@ class MainWindow(QMainWindow):
                 phash_threshold=self.phash_threshold.value(),
                 dhash_threshold=self.dhash_threshold.value(),
             )
+
+    def finish_embedding_analysis(self, result: DuplicateAnalysisResult) -> None:
+        self.apply_duplicate_result(result)
+
+    def apply_duplicate_result(self, result: DuplicateAnalysisResult) -> None:
+        self.duplicate_result = result
+        self.sort_records_by_duplicate_groups()
+        self.populate_table()
+        self.populate_group_table()
 
     def clear_duplicate_groups(self) -> None:
         self.duplicate_result = None
@@ -2160,6 +2318,7 @@ class MainWindow(QMainWindow):
         self.scan_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy)
         self.prepare_cache_button.setEnabled(not busy)
+        self.embedding_analyze_button.setEnabled(not busy and self.embedding_available())
         self.apply_recommendations_button.setEnabled(not busy)
         self.execute_button.setEnabled(not busy)
         self.status_label.setText(message)

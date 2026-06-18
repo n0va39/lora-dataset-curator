@@ -34,6 +34,8 @@ def test_app_storage_layout_is_created(tmp_path):
     assert settings["active_profile"] == "default"
     assert profile["duplicates"]["use_perceptual"] is True
     assert profile["duplicates"]["phash_threshold"] == 6
+    assert profile["embedding"]["cell_match_min"] == 0.93
+    assert profile["embedding"]["match_frac_min"] == 0.25
 
 
 def test_dataset_cache_uses_stable_path_key(tmp_path):
@@ -105,6 +107,27 @@ def test_default_profile_duplicate_settings_are_saved(tmp_path):
     assert profile["duplicates"]["dhash_threshold"] == 11
     assert profile["duplicates"]["max_perceptual_pairs"] == 500_000
     assert profile["actions"]["delete_mode"] == "quarantine"
+
+
+def test_default_profile_embedding_settings_are_saved(tmp_path):
+    save_default_profile(
+        {
+            "embedding": {
+                "anima_venv": "D:/Anima/.venv",
+                "cell_match_min": 0.91,
+                "match_frac_min": 0.33,
+                "device": "cpu",
+            }
+        }
+    )
+
+    profile = load_default_profile()
+
+    assert profile["embedding"]["anima_venv"] == "D:/Anima/.venv"
+    assert profile["embedding"]["cell_match_min"] == 0.91
+    assert profile["embedding"]["match_frac_min"] == 0.33
+    assert profile["embedding"]["device"] == "cpu"
+    assert profile["embedding"]["grid"] == 7
 
 
 def test_clear_cache_removes_only_cache_contents(tmp_path):

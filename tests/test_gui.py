@@ -14,9 +14,11 @@ QtTest = pytest.importorskip("PySide6.QtTest")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.error_log import append_error_log, read_error_log  # noqa: E402
+from lora_dataset_curator.models import DuplicateGroup, SimilarityPair  # noqa: E402
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
 from lora_dataset_curator.storage import (  # noqa: E402
     APP_HOME_ENV,
+    duplicate_groups_file_path,
     ensure_app_data_dirs,
     load_settings,
     save_settings,
@@ -92,6 +94,80 @@ def test_duplicate_settings_are_saved_and_restored(tmp_path):
     assert restored.dhash_threshold.value() == 11
 
     restored.close()
+
+
+def test_embedding_analysis_populates_group_tab_without_duplicate_cache(tmp_path, monkeypatch):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "b.png")
+    seen: dict[str, object] = {}
+
+    def fake_embedding_grouping(records, input_root, settings, **kwargs):
+        seen["input_root"] = input_root
+        seen["settings"] = settings
+        return main_window_module.DuplicateAnalysisResult(
+            records=records,
+            pairs=[
+                SimilarityPair(
+                    image_a=records[0].image_path,
+                    image_b=records[1].image_path,
+                    embedding_score=1.0,
+                )
+            ],
+            groups=[
+                DuplicateGroup(
+                    group_id="E0001",
+                    images=records,
+                    recommended_keep=records[0],
+                )
+            ],
+            group_reasons={"E0001": ["embedding grid match"]},
+        )
+
+    monkeypatch.setattr(
+        main_window_module,
+        "run_anima_embedding_grouping",
+        fake_embedding_grouping,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    anima_root = tmp_path / "anima"
+    anima_venv = anima_root / ".venv"
+    script = anima_root / "scripts" / "curate" / "build_groups.py"
+    python = anima_venv / "Scripts" / "python.exe"
+    script.parent.mkdir(parents=True)
+    python.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    python.write_text("", encoding="utf-8")
+    window.anima_venv_path.setText(str(anima_venv))
+    window.embedding_cell_match.setValue(0.91)
+    window.embedding_match_frac.setValue(0.33)
+    window.embedding_device.setText("cpu")
+    assert window.embedding_analyze_button.isEnabled()
+    window.analyze_embedding_groups()
+
+    assert app is not None
+    assert window.group_table.rowCount() == 1
+    assert window.group_table.item(0, 0).text() == "E0001"
+    assert seen["settings"].cell_match_min == 0.91
+    assert seen["settings"].match_frac_min == 0.33
+    assert seen["settings"].device == "cpu"
+    assert not duplicate_groups_file_path(tmp_path).exists()
+
+    window.close()
+
+
+def test_embedding_analysis_button_requires_valid_anima_venv(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=None, output_dir=tmp_path / "out", background_tasks=False)
+
+    window.anima_venv_path.setText(str(tmp_path / "missing-venv"))
+
+    assert app is not None
+    assert not window.embedding_analyze_button.isEnabled()
+    assert "유효한 Anima LoRA .venv" in window.embedding_analyze_button.toolTip()
+
+    window.close()
 
 
 def test_main_window_restores_and_saves_last_paths(tmp_path):
