@@ -68,9 +68,9 @@ from lora_dataset_curator.duplicate_analysis import (
 )
 from lora_dataset_curator.error_log import (
     append_error_log,
-    append_exception_log,
     clear_error_log,
     error_log_path,
+    native_crash_log_path,
     read_error_log,
 )
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
@@ -1819,27 +1819,17 @@ class MainWindow(QMainWindow):
 
         input_dir = Path(self.input_path.text()).expanduser()
         include_perceptual = self.use_perceptual_checkbox.isChecked()
-        if self.background_tasks:
-            self.start_background_task(
-                lambda progress_callback: prepare_hash_cache(
-                    self.records,
-                    hash_cache_root=input_dir,
-                    include_perceptual=include_perceptual,
-                    max_workers=1,
-                    progress_callback=progress_callback,
-                ),
-                self.finish_prepare_cache,
-                "해시 캐시 준비를 시작했습니다.",
-            )
-            return
-
-        prepare_hash_cache(
-            self.records,
-            hash_cache_root=input_dir,
-            include_perceptual=include_perceptual,
-            max_workers=1,
+        self.run_foreground_task(
+            lambda progress_callback: prepare_hash_cache(
+                self.records,
+                hash_cache_root=input_dir,
+                include_perceptual=include_perceptual,
+                max_workers=1,
+                progress_callback=progress_callback,
+            ),
+            self.finish_prepare_cache,
+            "해시 캐시 준비를 시작했습니다.",
         )
-        self.finish_prepare_cache(None)
 
     def finish_prepare_cache(self, _result: object) -> None:
         self.duplicate_summary_label.setText(
@@ -1862,50 +1852,47 @@ class MainWindow(QMainWindow):
             return
 
         input_dir = Path(self.input_path.text()).expanduser()
-        cached_result = load_duplicate_result(
-            self.output_root(),
-            input_dir,
-            self.records,
-            use_perceptual=use_perceptual,
-            phash_threshold=self.phash_threshold.value(),
-            dhash_threshold=self.dhash_threshold.value(),
-            result_type=DuplicateAnalysisResult,
-        )
+        try:
+            cached_result = load_duplicate_result(
+                self.output_root(),
+                input_dir,
+                self.records,
+                use_perceptual=use_perceptual,
+                phash_threshold=self.phash_threshold.value(),
+                dhash_threshold=self.dhash_threshold.value(),
+                result_type=DuplicateAnalysisResult,
+            )
+        except Exception:
+            append_error_log(
+                "Failed to load duplicate group cache; recomputing.\n"
+                f"{traceback.format_exc()}"
+            )
+            cached_result = None
         if cached_result is not None:
-            self.finish_duplicate_analysis(cached_result)
+            try:
+                self.finish_duplicate_analysis(cached_result)
+            except Exception:
+                self.fail_background_task(traceback.format_exc())
+                return
             self.set_busy(False, "캐시된 중복 그룹을 불러왔습니다.")
             return
 
-        if self.background_tasks:
-            phash_threshold = self.phash_threshold.value()
-            dhash_threshold = self.dhash_threshold.value()
-            hash_cache_root = input_dir
-            self.start_background_task(
-                lambda progress_callback: analyze_duplicates(
-                    self.records,
-                    use_perceptual=use_perceptual,
-                    phash_threshold=phash_threshold,
-                    dhash_threshold=dhash_threshold,
-                    max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
-                    max_workers=1,
-                    hash_cache_root=hash_cache_root,
-                    progress_callback=progress_callback,
-                ),
-                self.finish_duplicate_analysis,
-                "중복 분석을 시작했습니다.",
-            )
-            return
-
-        self.finish_duplicate_analysis(
-            analyze_duplicates(
+        phash_threshold = self.phash_threshold.value()
+        dhash_threshold = self.dhash_threshold.value()
+        hash_cache_root = input_dir
+        self.run_foreground_task(
+            lambda progress_callback: analyze_duplicates(
                 self.records,
-                use_perceptual=self.use_perceptual_checkbox.isChecked(),
-                phash_threshold=self.phash_threshold.value(),
-                dhash_threshold=self.dhash_threshold.value(),
+                use_perceptual=use_perceptual,
+                phash_threshold=phash_threshold,
+                dhash_threshold=dhash_threshold,
                 max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
                 max_workers=1,
-                hash_cache_root=input_dir,
-            )
+                hash_cache_root=hash_cache_root,
+                progress_callback=progress_callback,
+            ),
+            self.finish_duplicate_analysis,
+            "중복 분석을 시작했습니다.",
         )
 
     def finish_duplicate_analysis(self, result: DuplicateAnalysisResult) -> None:
@@ -2093,6 +2080,26 @@ class MainWindow(QMainWindow):
         self.active_worker = worker
         thread.start()
 
+    def run_foreground_task(
+        self,
+        task: Callable[[ProgressCallback], object],
+        on_finished: Callable[[object], None],
+        message: str,
+    ) -> None:
+        if self.active_thread is not None:
+            QMessageBox.information(self, "작업 진행 중", "현재 작업이 끝난 뒤 다시 시도하세요.")
+            return
+
+        self.set_busy(True, message)
+        QApplication.processEvents()
+        try:
+            result = task(self.update_progress)
+            on_finished(result)
+        except Exception:
+            self.fail_background_task(traceback.format_exc())
+            return
+        self.set_busy(False, "완료")
+
     def finish_background_task(
         self,
         result: object,
@@ -2116,18 +2123,22 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(
             self,
             "작업 실패",
-            f"{message}\n\n오류 로그: {error_log_path()}",
+            (
+                f"{message}\n\n"
+                f"오류 로그: {error_log_path()}\n"
+                f"Native crash 로그: {native_crash_log_path()}"
+            ),
         )
 
     def update_progress(self, current: int, total: int, message: str) -> None:
-        if self.active_thread is None:
-            return
         if total <= 0:
             self.progress_bar.setRange(0, 0)
         else:
             self.progress_bar.setRange(0, total)
             self.progress_bar.setValue(current)
         self.status_label.setText(f"{message} ({current}/{total})" if total else message)
+        if self.active_thread is None:
+            QApplication.processEvents()
 
     def set_busy(self, busy: bool, message: str) -> None:
         self.scan_button.setEnabled(not busy)
@@ -2242,12 +2253,5 @@ def format_quality_details(record: ImageRecord) -> str:
 def run_gui(input_dir: Path | None = None, output_dir: Path | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     window = MainWindow(input_dir=input_dir, output_dir=output_dir)
-    previous_excepthook = sys.excepthook
-
-    def log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
-        append_exception_log(exc_type, exc_value, exc_traceback)
-        previous_excepthook(exc_type, exc_value, exc_traceback)
-
-    sys.excepthook = log_uncaught_exception
     window.show()
     return app.exec()
