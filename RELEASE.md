@@ -1,5 +1,24 @@
 # Release Notes
 
+## 0.1.3
+
+ANIMA PE 분석 사용 후 실행/재실행 안정성을 보강한 핫픽스 릴리즈입니다.
+
+### 수정 사항
+
+- ANIMA PE 분석 완료 후 background worker 종료 시 UI 갱신이 main thread에서 실행되도록 수정
+- ANIMA PE 분석 후 실행 단계에서 발생하던 native crash 가능성 완화
+- ANIMA PE 분석 결과를 앱 재실행 후 같은 입력 폴더 스캔 시 자동 복원
+- 캐시된 ANIMA 그룹 복원 시 현재 남아 있는 파일 기준으로 유효한 그룹만 표시
+- PyInstaller 실패나 exe 잠금 상태를 릴리즈 스크립트가 놓치지 않도록 보강
+
+### 검증
+
+- `uv run ruff check`
+- `uv run pytest`
+- PowerShell build/package script syntax check
+- 0.1.3 release zip contents check
+
 ## 0.1.2
 
 유사 이미지 분석과 라이선스 안내를 보강한 릴리즈입니다.

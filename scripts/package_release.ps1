@@ -3,6 +3,19 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")
 
+function Invoke-Checked {
+  param(
+    [string]$Label,
+    [string]$Command,
+    [string[]]$Arguments
+  )
+
+  & $Command @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Label failed with exit code $LASTEXITCODE"
+  }
+}
+
 Push-Location $RepoRoot
 try {
   $Version = (Select-String -Path "pyproject.toml" -Pattern '^version = "(.+)"').Matches.Groups[1].Value
@@ -10,7 +23,10 @@ try {
     throw "Could not read project version from pyproject.toml."
   }
 
-  powershell -ExecutionPolicy Bypass -File "scripts\build_windows.ps1"
+  Invoke-Checked "build_windows.ps1" "powershell" @(
+    "-ExecutionPolicy", "Bypass",
+    "-File", "scripts\build_windows.ps1"
+  )
 
   $DistDir = Join-Path $RepoRoot "dist"
   $ExePath = Join-Path $DistDir "LoRA-Dataset-Curator.exe"
