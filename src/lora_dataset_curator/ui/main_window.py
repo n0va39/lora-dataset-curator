@@ -1812,6 +1812,7 @@ class MainWindow(QMainWindow):
                     self.records,
                     hash_cache_root=input_dir,
                     include_perceptual=include_perceptual,
+                    max_workers=1,
                     progress_callback=progress_callback,
                 ),
                 self.finish_prepare_cache,
@@ -1823,6 +1824,7 @@ class MainWindow(QMainWindow):
             self.records,
             hash_cache_root=input_dir,
             include_perceptual=include_perceptual,
+            max_workers=1,
         )
         self.finish_prepare_cache(None)
 

@@ -289,11 +289,18 @@ def attach_sha256(
     worker_count = resolve_max_workers(max_workers)
     if worker_count <= 1 or len(pending_records) == 1:
         for record in pending_records:
-            record.sha256 = compute_sha256(record.image_path)
-            if hash_cache is not None:
-                hash_cache.save(record, sha256=record.sha256)
-            if progress is not None:
-                progress.advance(progress_callback, f"SHA256 계산 중: {record.image_path.name}")
+            try:
+                record.sha256 = compute_sha256(record.image_path)
+                if hash_cache is not None:
+                    hash_cache.save(record, sha256=record.sha256)
+            except (OSError, RuntimeError, ValueError):
+                record.sha256 = None
+            finally:
+                if progress is not None:
+                    progress.advance(
+                        progress_callback,
+                        f"SHA256 계산 중: {record.image_path.name}",
+                    )
         return
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -303,11 +310,18 @@ def attach_sha256(
         }
         for future in as_completed(futures):
             record = futures[future]
-            record.sha256 = future.result()
-            if hash_cache is not None:
-                hash_cache.save(record, sha256=record.sha256)
-            if progress is not None:
-                progress.advance(progress_callback, f"SHA256 계산 중: {record.image_path.name}")
+            try:
+                record.sha256 = future.result()
+                if hash_cache is not None:
+                    hash_cache.save(record, sha256=record.sha256)
+            except (OSError, RuntimeError, ValueError):
+                record.sha256 = None
+            finally:
+                if progress is not None:
+                    progress.advance(
+                        progress_callback,
+                        f"SHA256 계산 중: {record.image_path.name}",
+                    )
 
 
 def bucket_records(
@@ -462,7 +476,7 @@ def compute_perceptual_hash_map(
                         phash=record_hashes.get("phash"),
                         dhash=record_hashes.get("dhash"),
                     )
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 pass
             finally:
                 if progress is not None:
@@ -523,7 +537,7 @@ def compute_perceptual_hash_map_serial(
                     phash=record_hashes.get("phash"),
                     dhash=record_hashes.get("dhash"),
                 )
-        except (OSError, RuntimeError, ValueError):
+        except Exception:
             continue
         finally:
             if progress is not None:

@@ -215,3 +215,41 @@ def test_prepare_hash_cache_rebuilds_corrupt_cache_file(tmp_path):
 
     assert cache_path.exists()
     assert list(cache_path.parent.glob("hashes.sqlite.corrupt-*"))
+
+
+def test_prepare_hash_cache_skips_sha256_failures(tmp_path, monkeypatch):
+    Image.new("RGB", (8, 8), color="red").save(tmp_path / "a.png")
+    records = scan_dataset(tmp_path)
+
+    def fail_sha256(path):
+        raise OSError(f"cannot read {path}")
+
+    monkeypatch.setattr(duplicate_analysis, "compute_sha256", fail_sha256)
+
+    prepare_hash_cache(
+        records,
+        hash_cache_root=tmp_path,
+        include_perceptual=False,
+        max_workers=1,
+    )
+
+    assert records[0].sha256 is None
+
+
+def test_prepare_hash_cache_skips_perceptual_failures(tmp_path, monkeypatch):
+    Image.new("RGB", (8, 8), color="red").save(tmp_path / "a.png")
+    records = scan_dataset(tmp_path)
+
+    def fail_perceptual(path):
+        raise RuntimeError(f"cannot hash {path}")
+
+    monkeypatch.setattr(duplicate_analysis, "compute_perceptual_hashes", fail_perceptual)
+
+    prepare_hash_cache(
+        records,
+        hash_cache_root=tmp_path,
+        include_perceptual=True,
+        max_workers=1,
+    )
+
+    assert records[0].sha256
