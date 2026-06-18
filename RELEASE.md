@@ -1,5 +1,25 @@
 # Release Notes
 
+## 0.1.1
+
+버그 수정 릴리즈입니다.
+
+### 수정 사항
+
+- 이동 실행 중 원본 파일이 사라지거나 대상 파일명이 충돌해도 exe가 종료되지 않도록 수정
+- 출력 폴더에 같은 파일명이 있으면 sidecar와 함께 `_1`, `_2` suffix로 안전하게 저장
+- 입력 폴더와 출력 폴더가 같을 때 source/target 동일 경로를 no-op 처리
+- GUI 오류 로그 저장 및 `파일 > 오류 로그 보기` 추가
+- `캐시 준비` 중 이미지별 SHA256/pHash/dHash 계산 실패 시 해당 파일만 건너뛰도록 수정
+- GUI `캐시 준비`와 `분석`을 단일 worker 해시 계산으로 실행해 exe 환경 안정성 개선
+- 중복 그룹 탭에 pHash/dHash 기준값 의미와 권장 범위 안내 추가
+
+### 검증
+
+- `uv run ruff check`
+- `uv run pytest`
+- `scripts/build_windows.ps1`
+
 ## 0.1.0
 
 초기 GUI MVP 릴리즈입니다.
