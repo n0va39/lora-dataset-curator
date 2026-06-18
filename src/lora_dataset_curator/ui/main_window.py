@@ -1038,6 +1038,18 @@ class MainWindow(QMainWindow):
         controls.addStretch()
         controls_widget.setLayout(controls)
 
+        self.duplicate_guide_label = QLabel(
+            "분석 팁: pHash/dHash 기준값은 해시 거리입니다. 0은 거의 완전 동일, "
+            "값이 클수록 더 느슨하게 유사 이미지를 묶습니다. 권장 시작값은 4-8, "
+            "강한 압축/리사이즈 후보까지 보려면 10-12, 15 초과는 지원하지 않습니다. "
+            "캐시 준비는 해시를 미리 계산하지만, 일반적으로 바로 분석을 눌러도 됩니다."
+        )
+        self.duplicate_guide_label.setWordWrap(True)
+        self.duplicate_guide_label.setStyleSheet(
+            "QLabel { color: #374151; background: #f8fafc; "
+            "border: 1px solid #e5e7eb; padding: 6px; }"
+        )
+
         self.duplicate_splitter = QSplitter()
         self.duplicate_splitter.setChildrenCollapsible(False)
         member_panel = QWidget()
@@ -1066,6 +1078,7 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.addWidget(controls_widget)
+        layout.addWidget(self.duplicate_guide_label)
         layout.addWidget(self.duplicate_vertical_splitter, stretch=1)
         return tab
 
@@ -1874,6 +1887,7 @@ class MainWindow(QMainWindow):
                     phash_threshold=phash_threshold,
                     dhash_threshold=dhash_threshold,
                     max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
+                    max_workers=1,
                     hash_cache_root=hash_cache_root,
                     progress_callback=progress_callback,
                 ),
@@ -1889,6 +1903,7 @@ class MainWindow(QMainWindow):
                 phash_threshold=self.phash_threshold.value(),
                 dhash_threshold=self.dhash_threshold.value(),
                 max_perceptual_pairs=DEFAULT_MAX_PERCEPTUAL_PAIRS,
+                max_workers=1,
                 hash_cache_root=input_dir,
             )
         )

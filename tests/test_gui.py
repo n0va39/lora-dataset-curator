@@ -43,6 +43,34 @@ def test_main_window_scans_initial_dataset(tmp_path):
     assert "이미지: 1" in window.summary_label.text()
     assert "캡션: 1개 연결, 0개 누락" in window.summary_label.text()
     assert window.use_perceptual_checkbox.isChecked()
+    assert "pHash/dHash 기준값은 해시 거리" in window.duplicate_guide_label.text()
+
+    window.close()
+
+
+def test_gui_duplicate_analysis_uses_single_worker(tmp_path, monkeypatch):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "b.png")
+    seen: dict[str, int | None] = {}
+
+    def fake_analyze_duplicates(records, **kwargs):
+        seen["max_workers"] = kwargs.get("max_workers")
+        return main_window_module.DuplicateAnalysisResult(
+            records=records,
+            pairs=[],
+            groups=[],
+            group_reasons={},
+        )
+
+    monkeypatch.setattr(main_window_module, "analyze_duplicates", fake_analyze_duplicates)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.use_perceptual_checkbox.setChecked(True)
+    window.analyze_duplicate_groups()
+
+    assert app is not None
+    assert seen["max_workers"] == 1
 
     window.close()
 
