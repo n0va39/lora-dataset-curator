@@ -75,6 +75,25 @@ def test_gui_duplicate_analysis_uses_single_worker(tmp_path, monkeypatch):
     window.close()
 
 
+def test_duplicate_settings_are_saved_and_restored(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=None, output_dir=tmp_path / "out", background_tasks=False)
+
+    window.use_perceptual_checkbox.setChecked(False)
+    window.phash_threshold.setValue(9)
+    window.dhash_threshold.setValue(11)
+    window.close()
+
+    restored = MainWindow(input_dir=None, output_dir=tmp_path / "out", background_tasks=False)
+
+    assert app is not None
+    assert not restored.use_perceptual_checkbox.isChecked()
+    assert restored.phash_threshold.value() == 9
+    assert restored.dhash_threshold.value() == 11
+
+    restored.close()
+
+
 def test_main_window_restores_and_saves_last_paths(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"

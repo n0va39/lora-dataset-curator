@@ -81,6 +81,7 @@ from lora_dataset_curator.storage import (
     ensure_app_data_dirs,
     load_default_profile,
     load_settings,
+    save_default_profile,
     save_settings,
 )
 from lora_dataset_curator.trash import empty_trash, restore_trash
@@ -812,6 +813,9 @@ class MainWindow(QMainWindow):
         self.dhash_threshold = QSpinBox()
         self.dhash_threshold.setRange(0, 64)
         self.dhash_threshold.setValue(int(duplicate_settings.get("dhash_threshold", 6)))
+        self.use_perceptual_checkbox.toggled.connect(self.save_duplicate_settings)
+        self.phash_threshold.valueChanged.connect(self.save_duplicate_settings)
+        self.dhash_threshold.valueChanged.connect(self.save_duplicate_settings)
 
         self.group_table = QTableWidget(0, 5)
         self.group_table.setHorizontalHeaderLabels(
@@ -879,6 +883,18 @@ class MainWindow(QMainWindow):
             return
         save_settings(updates)
         self.settings = load_settings()
+
+    def save_duplicate_settings(self, *_args: object) -> None:
+        save_default_profile(
+            {
+                "duplicates": {
+                    "use_perceptual": self.use_perceptual_checkbox.isChecked(),
+                    "phash_threshold": self.phash_threshold.value(),
+                    "dhash_threshold": self.dhash_threshold.value(),
+                }
+            }
+        )
+        self.profile = load_default_profile()
 
     @staticmethod
     def configure_interactive_header(table: QTableWidget, widths: list[int]) -> None:

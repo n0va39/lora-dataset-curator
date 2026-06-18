@@ -167,6 +167,35 @@ def load_default_profile() -> dict[str, Any]:
     return profile
 
 
+def save_default_profile(updates: dict[str, Any]) -> None:
+    paths = ensure_app_data_dirs()
+    current = load_default_profile()
+    merged = DEFAULT_PROFILE | current | updates
+
+    current_duplicates = current.get("duplicates", {})
+    update_duplicates = updates.get("duplicates", {})
+    if not isinstance(current_duplicates, dict):
+        current_duplicates = {}
+    if not isinstance(update_duplicates, dict):
+        update_duplicates = {}
+    merged["duplicates"] = (
+        DEFAULT_PROFILE["duplicates"] | current_duplicates | update_duplicates
+    )
+
+    current_actions = current.get("actions", {})
+    update_actions = updates.get("actions", {})
+    if not isinstance(current_actions, dict):
+        current_actions = {}
+    if not isinstance(update_actions, dict):
+        update_actions = {}
+    merged["actions"] = DEFAULT_PROFILE["actions"] | current_actions | update_actions
+
+    paths.default_profile_path.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def stable_path_key(path: Path | str) -> str:
     resolved = str(Path(path).expanduser().resolve())
     if os.name == "nt":

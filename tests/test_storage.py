@@ -9,6 +9,7 @@ from lora_dataset_curator.storage import (
     ensure_app_data_dirs,
     load_default_profile,
     load_settings,
+    save_default_profile,
     save_settings,
     stable_path_key,
 )
@@ -84,6 +85,26 @@ def test_settings_are_saved_with_defaults(tmp_path):
     assert settings["active_profile"] == "default"
     assert settings["last_input_dir"] == str(input_dir)
     assert settings["last_output_dir"] == str(output_dir)
+
+
+def test_default_profile_duplicate_settings_are_saved(tmp_path):
+    save_default_profile(
+        {
+            "duplicates": {
+                "use_perceptual": False,
+                "phash_threshold": 9,
+                "dhash_threshold": 11,
+            }
+        }
+    )
+
+    profile = load_default_profile()
+
+    assert profile["duplicates"]["use_perceptual"] is False
+    assert profile["duplicates"]["phash_threshold"] == 9
+    assert profile["duplicates"]["dhash_threshold"] == 11
+    assert profile["duplicates"]["max_perceptual_pairs"] == 500_000
+    assert profile["actions"]["delete_mode"] == "quarantine"
 
 
 def test_clear_cache_removes_only_cache_contents(tmp_path):
