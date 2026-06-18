@@ -9,6 +9,7 @@ from lora_dataset_curator.external_embedding import (
     AnimaEmbeddingSettings,
     anima_manifest_to_result,
     embedding_groups_path,
+    load_cached_anima_embedding_result,
     run_anima_embedding_grouping,
 )
 from lora_dataset_curator.scanner import scan_dataset
@@ -96,3 +97,25 @@ def test_run_anima_embedding_grouping_invokes_external_script(tmp_path, monkeypa
     assert seen["env"]["PYTHONUTF8"] == "1"
     assert embedding_groups_path(tmp_path).exists()
     assert len(result.groups) == 1
+
+
+def test_load_cached_anima_embedding_result_restores_manifest(tmp_path):
+    Image.new("RGB", (16, 16), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 16), color="red").save(tmp_path / "b.png")
+    records = scan_dataset(tmp_path)
+    embedding_groups_path(tmp_path).write_text(
+        """
+        {
+          "groups": [
+            {"mean_cosine": 0.99, "members": ["a.png", "b.png"]}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    result = load_cached_anima_embedding_result(records, tmp_path)
+
+    assert result is not None
+    assert len(result.groups) == 1
+    assert result.groups[0].group_id == "E0001"

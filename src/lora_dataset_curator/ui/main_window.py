@@ -77,6 +77,7 @@ from lora_dataset_curator.external_embedding import (
     AnimaEmbeddingSettings,
     detect_anima_venv,
     is_valid_anima_venv,
+    load_cached_anima_embedding_result,
     run_anima_embedding_grouping,
 )
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
@@ -744,6 +745,7 @@ class MainWindow(QMainWindow):
         self.background_tasks = background_tasks
         self.active_thread: QThread | None = None
         self.active_worker: TaskWorker | None = None
+        self.active_on_finished: Callable[[object], None] | None = None
         self.floating_preview: FloatingPreviewWindow | None = None
         self.app_paths = ensure_app_data_dirs()
         self.settings = load_settings()
@@ -1433,12 +1435,36 @@ class MainWindow(QMainWindow):
         self.review_decisions = load_decisions(self.output_root())
         self.crop_rects = load_crop_settings(self.output_root())
 
-        self.populate_table()
         self.clear_duplicate_groups()
+        restored = self.load_cached_embedding_groups()
+        if restored is not None:
+            self.apply_duplicate_result(restored)
+            self.duplicate_summary_label.setText(
+                f"캐시된 Anima 그룹: {len(restored.groups)} | "
+                f"후보 pair: {len(restored.pairs)}"
+            )
+        else:
+            self.populate_table()
         if self.records:
             self.table.selectRow(0)
         else:
             self.clear_details()
+
+    def load_cached_embedding_groups(self) -> DuplicateAnalysisResult | None:
+        try:
+            result = load_cached_anima_embedding_result(
+                self.records,
+                Path(self.input_path.text()).expanduser(),
+            )
+        except Exception:
+            append_error_log(
+                "Failed to load Anima embedding group cache; ignoring.\n"
+                f"{traceback.format_exc()}"
+            )
+            return None
+        if result is None or not result.groups:
+            return None
+        return result
 
     def populate_table(self) -> None:
         self.table.setRowCount(len(self.records))
@@ -2241,9 +2267,9 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.progress.connect(self.update_progress)
-        worker.finished.connect(lambda result: self.finish_background_task(result, on_finished))
-        worker.failed.connect(self.fail_background_task)
+        worker.progress.connect(self.update_progress, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(self.finish_background_task, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(self.fail_background_task, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -2252,6 +2278,7 @@ class MainWindow(QMainWindow):
 
         self.active_thread = thread
         self.active_worker = worker
+        self.active_on_finished = on_finished
         thread.start()
 
     def run_foreground_task(
@@ -2274,11 +2301,14 @@ class MainWindow(QMainWindow):
             return
         self.set_busy(False, "완료")
 
-    def finish_background_task(
-        self,
-        result: object,
-        on_finished: Callable[[object], None],
-    ) -> None:
+    @Slot(object)
+    def finish_background_task(self, result: object) -> None:
+        on_finished = self.active_on_finished
+        if on_finished is None:
+            self.set_busy(False, "완료")
+            self.active_thread = None
+            self.active_worker = None
+            return
         try:
             on_finished(result)
         except Exception:
@@ -2288,12 +2318,15 @@ class MainWindow(QMainWindow):
         self.set_busy(False, "완료")
         self.active_thread = None
         self.active_worker = None
+        self.active_on_finished = None
 
+    @Slot(str)
     def fail_background_task(self, message: str) -> None:
         append_error_log(message)
         self.set_busy(False, "실패")
         self.active_thread = None
         self.active_worker = None
+        self.active_on_finished = None
         QMessageBox.critical(
             self,
             "작업 실패",

@@ -171,6 +171,16 @@ def load_anima_embedding_result(
     return anima_manifest_to_result(data, records, input_root)
 
 
+def load_cached_anima_embedding_result(
+    records: list[ImageRecord],
+    input_root: Path | str,
+) -> DuplicateAnalysisResult | None:
+    path = embedding_groups_path(input_root)
+    if not path.exists():
+        return None
+    return load_anima_embedding_result(path, records, input_root)
+
+
 def anima_manifest_to_result(
     manifest: dict[str, Any],
     records: list[ImageRecord],

@@ -14,6 +14,7 @@ QtTest = pytest.importorskip("PySide6.QtTest")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from lora_dataset_curator.error_log import append_error_log, read_error_log  # noqa: E402
+from lora_dataset_curator.external_embedding import embedding_groups_path  # noqa: E402
 from lora_dataset_curator.models import DuplicateGroup, SimilarityPair  # noqa: E402
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
 from lora_dataset_curator.storage import (  # noqa: E402
@@ -73,6 +74,39 @@ def test_gui_duplicate_analysis_uses_single_worker(tmp_path, monkeypatch):
 
     assert app is not None
     assert seen["max_workers"] == 1
+
+    window.close()
+
+
+def test_background_task_finish_uses_stored_callback(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    results: list[object] = []
+    window.active_on_finished = results.append
+
+    window.finish_background_task("done")
+
+    assert app is not None
+    assert results == ["done"]
+    assert window.active_on_finished is None
+    assert window.active_thread is None
+    assert window.active_worker is None
+
+    window.close()
+
+
+def test_background_task_failure_clears_stored_callback(tmp_path, monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    window.active_on_finished = lambda _result: None
+    monkeypatch.setattr(QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None)
+
+    window.fail_background_task("failure")
+
+    assert app is not None
+    assert window.active_on_finished is None
+    assert window.active_thread is None
+    assert window.active_worker is None
 
     window.close()
 
@@ -153,6 +187,32 @@ def test_embedding_analysis_populates_group_tab_without_duplicate_cache(tmp_path
     assert seen["settings"].match_frac_min == 0.33
     assert seen["settings"].device == "cpu"
     assert not duplicate_groups_file_path(tmp_path).exists()
+
+    window.close()
+
+
+def test_scan_restores_cached_anima_embedding_groups(tmp_path):
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "a.png")
+    Image.new("RGB", (16, 8), color="red").save(tmp_path / "b.png")
+    embedding_groups_path(tmp_path).write_text(
+        """
+        {
+          "groups": [
+            {"mean_cosine": 0.99, "members": ["a.png", "b.png"]}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+
+    assert app is not None
+    assert window.group_table.rowCount() == 1
+    assert window.group_table.item(0, 0).text() == "E0001"
+    assert "캐시된 Anima 그룹: 1" in window.duplicate_summary_label.text()
+    assert window.table.item(0, 0).text() == "E0001"
 
     window.close()
 
