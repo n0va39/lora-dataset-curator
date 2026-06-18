@@ -1,5 +1,37 @@
 # Release Notes
 
+## 0.1.2
+
+유사 이미지 분석과 라이선스 안내를 보강한 릴리즈입니다.
+
+### 추가 사항
+
+- Anima LoRA PE-Spatial 임베딩 기반 유사 이미지 그룹 분석 추가
+- Anima LoRA `.venv` 경로 설정과 유효성 검사 추가
+- Anima LoRA 분석 기준값 `cell`, `match`, `device` 설정 추가
+- Anima LoRA 외부 프로세스 실행 오류 로그 기록 추가
+- Anima LoRA 관련 third-party notice 문서 추가
+- README와 사용자 가이드에 Anima LoRA PE 유사도 분석 사용법 추가
+
+### 배포 파일
+
+릴리즈 zip에는 아래 파일을 포함합니다.
+
+```text
+LoRA-Dataset-Curator.exe
+README.md
+RELEASE.md
+THIRD_PARTY_NOTICES.md
+docs/
+  USER_GUIDE.md
+  BUILD_DISTRIBUTION.md
+```
+
+### 검증
+
+- `uv run pytest`
+- `scripts/package_release.ps1`
+
 ## 0.1.1
 
 버그 수정 릴리즈입니다.
