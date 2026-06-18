@@ -22,6 +22,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -64,6 +65,13 @@ from lora_dataset_curator.duplicate_analysis import (
     DuplicateAnalysisResult,
     analyze_duplicates,
     prepare_hash_cache,
+)
+from lora_dataset_curator.error_log import (
+    append_error_log,
+    append_exception_log,
+    clear_error_log,
+    error_log_path,
+    read_error_log,
 )
 from lora_dataset_curator.grouping import image_quality_components, image_quality_score
 from lora_dataset_curator.models import ActionPlan, DuplicateGroup, ImageRecord
@@ -1114,6 +1122,14 @@ class MainWindow(QMainWindow):
         clear_cache_action.triggered.connect(self.clear_cache_items)
         file_menu.addAction(clear_cache_action)
 
+        show_error_log_action = QAction("오류 로그 보기", self)
+        show_error_log_action.triggered.connect(self.show_error_log)
+        file_menu.addAction(show_error_log_action)
+
+        clear_error_log_action = QAction("오류 로그 삭제", self)
+        clear_error_log_action.triggered.connect(self.clear_error_log_items)
+        file_menu.addAction(clear_error_log_action)
+
         file_menu.addSeparator()
 
         restore_trash_action = QAction("휴지통 복구", self)
@@ -1178,6 +1194,46 @@ class MainWindow(QMainWindow):
         message = f"캐시 삭제: {deleted_entries}개 항목 삭제"
         self.status_label.setText(message)
         QMessageBox.information(self, "캐시 삭제", message)
+
+    def show_error_log(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("오류 로그")
+        dialog.resize(900, 620)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        content = read_error_log()
+        text.setPlainText(content if content else "오류 로그가 없습니다.")
+
+        open_folder_button = QPushButton("로그 폴더 열기")
+        open_folder_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(error_log_path().parent))
+            )
+        )
+        close_button = QPushButton("닫기")
+        close_button.clicked.connect(dialog.close)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(open_folder_button)
+        buttons.addStretch()
+        buttons.addWidget(close_button)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(text)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def clear_error_log_items(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "오류 로그 삭제",
+            "오류 로그를 삭제합니다. 계속할까요?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        clear_error_log()
+        self.status_label.setText("오류 로그를 삭제했습니다.")
+        QMessageBox.information(self, "오류 로그 삭제", "오류 로그를 삭제했습니다.")
 
     def empty_trash_items(self) -> None:
         answer = QMessageBox.question(
@@ -2028,17 +2084,23 @@ class MainWindow(QMainWindow):
         try:
             on_finished(result)
         except Exception:
-            self.fail_background_task(traceback.format_exc())
+            message = traceback.format_exc()
+            self.fail_background_task(message)
             return
         self.set_busy(False, "완료")
         self.active_thread = None
         self.active_worker = None
 
     def fail_background_task(self, message: str) -> None:
+        append_error_log(message)
         self.set_busy(False, "실패")
         self.active_thread = None
         self.active_worker = None
-        QMessageBox.critical(self, "작업 실패", message)
+        QMessageBox.critical(
+            self,
+            "작업 실패",
+            f"{message}\n\n오류 로그: {error_log_path()}",
+        )
 
     def update_progress(self, current: int, total: int, message: str) -> None:
         if self.active_thread is None:
@@ -2163,5 +2225,12 @@ def format_quality_details(record: ImageRecord) -> str:
 def run_gui(input_dir: Path | None = None, output_dir: Path | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     window = MainWindow(input_dir=input_dir, output_dir=output_dir)
+    previous_excepthook = sys.excepthook
+
+    def log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
+        append_exception_log(exc_type, exc_value, exc_traceback)
+        previous_excepthook(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = log_uncaught_exception
     window.show()
     return app.exec()

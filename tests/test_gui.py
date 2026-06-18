@@ -13,6 +13,7 @@ QtGui = pytest.importorskip("PySide6.QtGui")
 QtTest = pytest.importorskip("PySide6.QtTest")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
+from lora_dataset_curator.error_log import append_error_log, read_error_log  # noqa: E402
 from lora_dataset_curator.scanner import scan_dataset  # noqa: E402
 from lora_dataset_curator.storage import (  # noqa: E402
     APP_HOME_ENV,
@@ -616,6 +617,44 @@ def test_clear_cache_menu_action_removes_cache(tmp_path, monkeypatch):
     assert not cached_group.exists()
     assert paths.dataset_cache_dir.is_dir()
     assert "캐시 삭제" in window.status_label.text()
+
+    window.close()
+
+
+def test_background_failure_is_written_to_error_log(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None)
+
+    window.fail_background_task("analysis failed")
+
+    assert app is not None
+    assert "analysis failed" in read_error_log()
+
+    window.close()
+
+
+def test_clear_error_log_menu_action(tmp_path, monkeypatch):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (100, 80), color="red").save(image_path)
+    append_error_log("old error")
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(input_dir=tmp_path, output_dir=tmp_path / "out", background_tasks=False)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
+
+    window.clear_error_log_items()
+
+    assert app is not None
+    assert read_error_log() == ""
 
     window.close()
 
